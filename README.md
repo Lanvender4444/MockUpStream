@@ -18,6 +18,8 @@
 > ① **怎么起 mock**（下面第 1 步，本地 or Docker）；
 > ② **new-api 渠道 Base URL 填什么**（第 2 步，取决于 **new-api 在哪跑**，不是 mock 在哪跑）。
 
+
+
 ### 第 1 步：起 mock（二选一）
 
 **方式 1 · 本地 bun**（宿主机装了 bun）
@@ -50,6 +52,8 @@ docker compose up            # 项目自带 docker-compose.yml
 >
 > 验证容器能否连到 mock：`docker exec -it new-api sh -c "wget -qO- http://host.docker.internal:8788/v1/models"`，返回模型列表即通。
 
+
+
 ---
 
 ## 控制台用法
@@ -68,6 +72,88 @@ docker compose up            # 项目自带 docker-compose.yml
 
 配置写入 SQLite 库 `mock.db`，重启不丢（每次提交即时落盘，抗强杀）。
 
+
+
+---
+
+## 发送API
+
+### **Bash: **
+
+**流式**
+
+```bash
+curl http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer sk-your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"测试"}]}'
+```
+
+**非流式**
+
+```bash
+curl http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer sk-your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-3.5-turbo","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"测试"}]}'
+```
+
+
+
+### PowerShell
+
+**流式**
+
+```powershell
+curl http://localhost:3000/v1/chat/completions `
+  -H "Authorization: Bearer sk-your-api-key" `
+  -H "Content-Type: application/json" `
+  -d "{\"model\":\"gpt-3.5-turbo\",\"messages\":[{\"role\":\"user\",\"content\":\"测试\"}]}"
+```
+
+**非流式**
+
+```powershell
+curl http://localhost:3000/v1/chat/completions `
+  -H "Authorization: Bearer sk-your-api-key" `
+  -H "Content-Type: application/json" `
+  -d "{\"model\":\"gpt-3.5-turbo\",\"stream\":true,\"stream_options\":{\"include_usage\":true},\"messages\":[{\"role\":\"user\",\"content\":\"测试\"}]}"
+```
+
+
+
+### Windows CMD / DOS 
+
+**流式**
+
+```cmd
+curl http://localhost:3000/v1/chat/completions ^
+  -H "Authorization: Bearer sk-your-api-key" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"gpt-3.5-turbo\",\"messages\":[{\"role\":\"user\",\"content\":\"测试\"}]}"
+```
+
+**非流式**
+
+```cmd
+curl http://localhost:3000/v1/chat/completions ^
+  -H "Authorization: Bearer sk-your-api-key" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"gpt-3.5-turbo\",\"stream\":true,\"stream_options\":{\"include_usage\":true},\"messages\":[{\"role\":\"user\",\"content\":\"测试\"}]}"
+```
+
+
+
+---
+
+## APIFox 接入
+
+<p align="left">
+    <a href="./APIFox.md">APIFox</a>
+<p>
+
+
+
 ---
 
 ## 三种协议 / endpoint
@@ -79,6 +165,8 @@ docker compose up            # 项目自带 docker-compose.yml
 | gemini | Gemini | `POST /v1beta/models/{model}:generateContent`（流式 `:streamGenerateContent`） | `usageMetadata.promptTokenCount / candidatesTokenCount / cachedContentTokenCount` |
 
 > **响应格式由请求打到哪个 endpoint 决定**，不是看模型的 format 字段。format 字段只影响面板分组和 `/v1/models` 列表。
+
+
 
 ---
 
@@ -103,6 +191,8 @@ MockUpStream/
 
 跑测试：`bun test`
 
+
+
 ---
 
 ## 快速自测（不经 new-api，直接打 mock）
@@ -118,6 +208,8 @@ curl -s http://localhost:8788/v1/messages -H 'Content-Type: application/json' \
 curl -s "http://localhost:8788/v1beta/models/gemini-2.5-pro:generateContent" -H 'Content-Type: application/json' \
   -d '{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}'
 ```
+
+
 
 ---
 
