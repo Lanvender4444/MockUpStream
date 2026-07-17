@@ -1,6 +1,6 @@
 // formats/claude.js —— Claude Messages 格式: /v1/messages
 // Claude usage 语义: input_tokens 通常不含缓存部分; 缓存读/写单列。
-import { computeUsage } from "../usage.js";
+import { computeUsage, buildOutputText, chunkText } from "../usage.js";
 
 const ID = "msg_mockclaude0001";
 
@@ -26,7 +26,7 @@ export function buildResponse(cfg, messages, model) {
   const u = computeUsage(cfg, messages);
   return {
     id: ID, type: "message", role: "assistant", model,
-    content: [{ type: "text", text: cfg.content }],
+    content: [{ type: "text", text: buildOutputText(cfg) }],
     stop_reason: "end_turn", stop_sequence: null,
     usage: toUsage(u),
   };
@@ -49,7 +49,7 @@ export async function buildStream(cfg, messages, model, send, sleep) {
     },
   });
   send("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
-  for (const ch of (cfg.content.match(/.{1,8}/gs) || [cfg.content])) {
+  for (const ch of chunkText(buildOutputText(cfg))) {
     if (cfg.chunkDelayMs > 0) await sleep(cfg.chunkDelayMs);
     send("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: ch } });
   }

@@ -1,5 +1,5 @@
 // formats/openai.js —— OpenAI 兼容格式: /v1/chat/completions
-import { computeUsage } from "../usage.js";
+import { computeUsage, buildOutputText, chunkText } from "../usage.js";
 
 const ID = "chatcmpl-mock-0001";
 const CREATED = 1700000000;
@@ -29,7 +29,7 @@ export function buildResponse(cfg, messages, model) {
   const u = computeUsage(cfg, messages);
   return {
     id: ID, object: "chat.completion", created: CREATED, model,
-    choices: [{ index: 0, message: { role: "assistant", content: cfg.content }, finish_reason: "stop" }],
+    choices: [{ index: 0, message: { role: "assistant", content: buildOutputText(cfg) }, finish_reason: "stop" }],
     usage: toUsage(u),
   };
 }
@@ -39,7 +39,7 @@ export async function buildStream(cfg, messages, model, send, sleep) {
   const u = computeUsage(cfg, messages);
   const base = { id: ID, object: "chat.completion.chunk", created: CREATED, model };
   send({ ...base, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
-  for (const ch of (cfg.content.match(/.{1,8}/gs) || [cfg.content])) {
+  for (const ch of chunkText(buildOutputText(cfg))) {
     if (cfg.chunkDelayMs > 0) await sleep(cfg.chunkDelayMs);
     send({ ...base, choices: [{ index: 0, delta: { content: ch }, finish_reason: null }] });
   }

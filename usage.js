@@ -48,3 +48,27 @@ export function computeUsage(cfg, messages) {
 export function shouldInjectError(cfg) {
   return Number(cfg.errorStatus) > 0 && Math.random() * 100 < Number(cfg.errorRate);
 }
+
+// 生成"实际输出文本"，其 token 数(≈char/4)与 completionTokens 对齐，
+// 使 设置 = 上报 = 实际输出 三者一致。内容以 cfg.content 为基底裁剪/循环填充。
+export function buildOutputText(cfg) {
+  const target = Math.max(0, Math.floor(Number(cfg.completionTokens) || 0));
+  const targetChars = target * 4;
+  if (targetChars === 0) return "";
+  const base = String(cfg.content || "").trim();
+  if (base.length === 0) return "词".repeat(targetChars);
+  if (base.length >= targetChars) return base.slice(0, targetChars);
+  let out = base;
+  const unit = base + " ";
+  while (out.length < targetChars) out += unit;
+  return out.slice(0, targetChars);
+}
+
+// 把文本切成"至多 maxChunks 块"(每块 >=8 字符)，避免超长输出逐字符流式卡死。
+export function chunkText(text, maxChunks = 120) {
+  if (!text) return [""];
+  const size = Math.max(8, Math.ceil(text.length / maxChunks));
+  const chunks = [];
+  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
+  return chunks;
+}

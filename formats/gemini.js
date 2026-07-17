@@ -1,5 +1,5 @@
 // formats/gemini.js —— Gemini 格式: /v1beta/models/{model}:generateContent 与 :streamGenerateContent
-import { computeUsage, countTextTokens } from "../usage.js";
+import { computeUsage, countTextTokens, buildOutputText, chunkText } from "../usage.js";
 
 // Gemini 请求: { contents:[{role, parts:[{text}]}], systemInstruction? }, model 在 URL path 里
 export function parseRequest(body, url) {
@@ -40,7 +40,7 @@ function candidate(text, finish) {
 export function buildResponse(cfg, messages, model) {
   const u = computeUsage(cfg, messages);
   return {
-    candidates: [candidate(cfg.content, "STOP")],
+    candidates: [candidate(buildOutputText(cfg), "STOP")],
     usageMetadata: toUsageMetadata(u),
     modelVersion: model,
   };
@@ -50,7 +50,7 @@ export function buildResponse(cfg, messages, model) {
 // new-api 用 SSE(每块 "data: {json}")。最后一块含 usageMetadata。
 export async function buildStream(cfg, messages, model, send, sleep) {
   const u = computeUsage(cfg, messages);
-  const chunks = cfg.content.match(/.{1,8}/gs) || [cfg.content];
+  const chunks = chunkText(buildOutputText(cfg));
   for (let i = 0; i < chunks.length; i++) {
     if (cfg.chunkDelayMs > 0) await sleep(cfg.chunkDelayMs);
     const last = i === chunks.length - 1;
