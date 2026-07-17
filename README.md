@@ -12,44 +12,43 @@
 ## 一键启动
 
 > 端口默认 **8788**，控制台 `http://localhost:8788/`。首次启动自动生成 `config.json`（含 3 个示例模型 + 4 个预设）。
-> 下面所有命令都**在本项目根目录（MockUpStream/）里执行**，用相对路径，拉到哪儿都能跑。
+> 下面命令都**在本项目根目录（MockUpStream/）里执行**，用相对路径，拉到哪儿都能跑。
+>
+> ⚠️ **两件事互相独立，别搞混**：
+> ① **怎么起 mock**（下面第 1 步，本地 or Docker）；
+> ② **new-api 渠道 Base URL 填什么**（第 2 步，取决于 **new-api 在哪跑**，不是 mock 在哪跑）。
 
-### 情况 A：本地直接跑（宿主机装了 bun）
+### 第 1 步：起 mock（二选一）
 
-**任意平台**（在项目根目录）
+**方式 1 · 本地 bun**（宿主机装了 bun）
 ```bash
 bun run server.js
 ```
+自定义端口：Bash `MOCK_PORT=9999 bun run server.js`／PowerShell `$env:MOCK_PORT=9999; bun run server.js`／CMD `set MOCK_PORT=9999 && bun run server.js`
 
-自定义端口：
-- Bash / macOS / Linux：`MOCK_PORT=9999 bun run server.js`
-- PowerShell：`$env:MOCK_PORT=9999; bun run server.js`
-- CMD：`set MOCK_PORT=9999 && bun run server.js`
-
-→ new-api 渠道 Base URL 填 `http://localhost:8788`。
-
-### 情况 B：用 Docker 跑（无需本机装 bun）
-
-**自带 compose（最简单）**——本项目根目录已含 `docker-compose.yml`：
+**方式 2 · Docker**（无需本机装 bun）
 ```bash
-docker compose up
+docker compose up            # 项目自带 docker-compose.yml
 ```
+或一条 `docker run`（把当前目录挂进容器）：
+- Bash/macOS/Linux：`docker run --rm -it -p 8788:8788 -v "$PWD":/app -w /app oven/bun:latest bun run server.js`
+- PowerShell：`docker run --rm -it -p 8788:8788 -v ${PWD}:/app -w /app oven/bun:latest bun run server.js`
+- CMD：`docker run --rm -it -p 8788:8788 -v %cd%:/app -w /app oven/bun:latest bun run server.js`
 
-**或一条 docker run**（把当前目录挂进容器）：
-- Git Bash / macOS / Linux：
-  ```bash
-  docker run --rm -it -p 8788:8788 -v "$PWD":/app -w /app oven/bun:latest bun run server.js
-  ```
-- PowerShell：
-  ```powershell
-  docker run --rm -it -p 8788:8788 -v ${PWD}:/app -w /app oven/bun:latest bun run server.js
-  ```
-- CMD：
-  ```bat
-  docker run --rm -it -p 8788:8788 -v %cd%:/app -w /app oven/bun:latest bun run server.js
-  ```
+### 第 2 步：new-api 渠道 Base URL 填什么
 
-→ 若 new-api 也在容器里，渠道 Base URL 填 **`http://host.docker.internal:8788`**（Docker Desktop 内置该 DNS）；若把本项目并入 new-api 的 compose 网络，则用服务名 `http://mock-upstream:8788`。
+**取决于 new-api（调用方）在哪跑**：
+
+| new-api 在哪 | mock 在哪 | 渠道 Base URL |
+|---|---|---|
+| 本地 | 本地 | `http://localhost:8788` |
+| **Docker** | **本地(宿主机)** | **`http://host.docker.internal:8788`** ← 常见：new-api 用 compose 起、mock 本地 `bun run` |
+| Docker | Docker（独立 `docker run`/`compose up`） | `http://host.docker.internal:8788` |
+| Docker | Docker（并入 new-api 同一 compose 网络） | `http://mock-upstream:8788`（服务名，最稳） |
+
+> 核心规则：**容器里的 `localhost` 指容器自己**。只要 new-api 在容器里、mock 不在同一个容器网络，就用 `host.docker.internal`（Windows/Mac 的 Docker Desktop 内置该 DNS；Linux 需给 new-api 服务加 `extra_hosts: ["host.docker.internal:host-gateway"]`）。
+>
+> 验证容器能否连到 mock：`docker exec -it new-api sh -c "wget -qO- http://host.docker.internal:8788/v1/models"`，返回模型列表即通。
 
 ---
 
