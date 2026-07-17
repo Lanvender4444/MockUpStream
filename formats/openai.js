@@ -1,5 +1,5 @@
 // formats/openai.js —— OpenAI 兼容格式: /v1/chat/completions
-import { computeUsage, buildOutputText, chunkText } from "../usage.js";
+import { computeUsage, chunkText } from "../usage.js";
 
 const ID = "chatcmpl-mock-0001";
 const CREATED = 1700000000;
@@ -24,22 +24,22 @@ function toUsage(u) {
   };
 }
 
-// 非流式响应体
+// 非流式响应体。content 原样返回(不被 completionTokens 截断)。
 export function buildResponse(cfg, messages, model) {
   const u = computeUsage(cfg, messages);
   return {
     id: ID, object: "chat.completion", created: CREATED, model,
-    choices: [{ index: 0, message: { role: "assistant", content: buildOutputText(cfg) }, finish_reason: "stop" }],
+    choices: [{ index: 0, message: { role: "assistant", content: cfg.content }, finish_reason: "stop" }],
     usage: toUsage(u),
   };
 }
 
-// 流式: 通过 send(obj) 逐块发 SSE data; 末尾发 usage 块 + [DONE]
+// 流式: 把 content 分块(至多 120 块)逐块发; 末尾发 usage 块 + [DONE]
 export async function buildStream(cfg, messages, model, send, sleep) {
   const u = computeUsage(cfg, messages);
   const base = { id: ID, object: "chat.completion.chunk", created: CREATED, model };
   send({ ...base, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
-  for (const ch of chunkText(buildOutputText(cfg))) {
+  for (const ch of chunkText(cfg.content)) {
     if (cfg.chunkDelayMs > 0) await sleep(cfg.chunkDelayMs);
     send({ ...base, choices: [{ index: 0, delta: { content: ch }, finish_reason: null }] });
   }

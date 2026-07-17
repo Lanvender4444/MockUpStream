@@ -151,6 +151,7 @@
         </select>
       </div>
       <div class="row"><label>回复内容</label><textarea x-model="sel.content"></textarea></div>
+      <div class="hint" style="margin:-4px 0 10px">回复内容=实际返回的文本（原样，不截断）；「输出 token」只是**上报的计费数字**，与正文长度无关，互不影响。</div>
       <div class="row"><label>输入 token</label>
         <div class="grid2">
           <select x-model="sel.promptMode"><option value="auto">auto（按输入估算）</option><option value="fixed">fixed（固定）</option></select>

@@ -1,6 +1,6 @@
 // formats.test.js —— bun test: 校验三种格式的 usage 映射与流式末块含 usage。
 import { test, expect } from "bun:test";
-import { computeUsage, buildOutputText, chunkText } from "./usage.js";
+import { computeUsage, chunkText } from "./usage.js";
 import * as openai from "./formats/openai.js";
 import * as claude from "./formats/claude.js";
 import * as gemini from "./formats/gemini.js";
@@ -89,31 +89,24 @@ test("parseRequest: gemini 从 path 解析 model 与 stream", () => {
   expect(p.stream).toBe(true);
 });
 
-test("buildOutputText: 实际内容 token 数 ≈ completionTokens(设置=输出一致)", () => {
-  // completionTokens=1000 -> 文本长度 ≈ 4000 字符 -> ≈1000 tokens
-  const text = buildOutputText({ content: "hello", completionTokens: 1000 });
-  expect(Math.round(text.length / 4)).toBe(1000);
+test("buildOutputText 已移除: content 原样返回, 不被 completionTokens 截断", () => {
+  const long = "这是一段很长的自定义回复".repeat(50); // 用户写的长正文
+  const cfg = { content: long, completionTokens: 30, promptMode: "fixed", promptTokens: 10, cacheMode: "none" };
+  const r = openai.buildResponse(cfg, [], "m");
+  expect(r.choices[0].message.content).toBe(long);       // 原样, 不截断
+  expect(r.usage.completion_tokens).toBe(30);            // 计费数独立
 });
 
-test("buildOutputText: 超长输出 300万 也能一致生成", () => {
-  const text = buildOutputText({ content: "词", completionTokens: 3000000 });
-  expect(Math.round(text.length / 4)).toBe(3000000);
+test("claude / gemini 也原样返回 content", () => {
+  const long = "reply".repeat(100);
+  const cfg = { content: long, completionTokens: 5, cacheMode: "none", promptMode: "fixed", promptTokens: 1 };
+  expect(claude.buildResponse(cfg, [], "m").content[0].text).toBe(long);
+  expect(gemini.buildResponse(cfg, [], "m").candidates[0].content.parts[0].text).toBe(long);
 });
 
-test("buildOutputText: completionTokens=0 -> 空", () => {
-  expect(buildOutputText({ content: "x", completionTokens: 0 })).toBe("");
-});
-
-test("chunkText: 超长文本被限制在 <=120 块", () => {
+test("chunkText: 超长文本被限制在 <=120 块且无丢失", () => {
   const text = "a".repeat(4_000_000);
   const chunks = chunkText(text);
   expect(chunks.length).toBeLessThanOrEqual(120);
-  expect(chunks.join("")).toBe(text); // 无丢失
-});
-
-test("openai buildResponse: 输出内容长度与 completion_tokens 对齐", () => {
-  const cfg = { content: "hi", completionTokens: 500, promptMode: "fixed", promptTokens: 10, cacheMode: "none" };
-  const r = openai.buildResponse(cfg, [], "m");
-  expect(r.usage.completion_tokens).toBe(500);
-  expect(Math.round(r.choices[0].message.content.length / 4)).toBe(500);
+  expect(chunks.join("")).toBe(text);
 });
