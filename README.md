@@ -1,6 +1,6 @@
 # Mock 上游（多模型 · 三格式 · 带控制台）
 
-不用真实 API key，给 new-api 提供一个可视化控制的假上游：**多模型档案 + 场景预设 + OpenAI/Claude/Gemini 三种协议 + 文件持久化**。
+不用真实 API key，给 new-api 提供一个可视化控制的假上游：**多模型档案 + 场景预设 + OpenAI/Claude/Gemini 三种协议 + SQLite 持久化**。
 
 ```
 浏览器/客户端 ──▶ new-api（真实全流程）──▶ 本 mock（你在网页上控制输出）
@@ -11,7 +11,7 @@
 
 ## 一键启动
 
-> 端口默认 **8788**，控制台 `http://localhost:8788/`。首次启动自动生成 `config.json`（含 3 个示例模型 + 4 个预设）。
+> 端口默认 **8788**，控制台 `http://localhost:8788/`。首次启动自动生成 SQLite 库 `mock.db`（含 3 个示例模型 + 4 个预设）。
 > 下面命令都**在本项目根目录（MockUpStream/）里执行**，用相对路径，拉到哪儿都能跑。
 >
 > ⚠️ **两件事互相独立，别搞混**：
@@ -62,7 +62,7 @@ docker compose up            # 项目自带 docker-compose.yml
 - **Base URL / endpoint 提示**：直接复制到 new-api 渠道；Docker 下把 `localhost` 换成 `host.docker.internal`。
 - **最近请求**：实时表格，看每次调用的模型/格式/流/token/错误。
 
-配置写入 `config.json`，重启不丢。
+配置写入 SQLite 库 `mock.db`，重启不丢（每次提交即时落盘，抗强杀）。
 
 ---
 
@@ -83,7 +83,7 @@ docker compose up            # 项目自带 docker-compose.yml
 ```
 MockUpStream/
 ├── server.js            # 入口 + 路由分发
-├── store.js             # config.json 读写 / 模型·预设增删改
+├── store.js             # SQLite(bun:sqlite) 读写 / 模型·预设增删改
 ├── presets.js           # 4 个内置场景预设
 ├── usage.js             # 格式无关的 token 计算
 ├── formats/
@@ -93,7 +93,7 @@ MockUpStream/
 ├── vendor/alpine.min.js # 本地 Alpine（无联网依赖）
 ├── panel.html           # 控制台
 ├── docker-compose.yml   # 独立 Docker 运行（相对挂载）
-├── config.json          # 持久化（自动生成，可删除以重置）
+├── mock.db              # SQLite 持久化（自动生成，可删除以重置；已 gitignore）
 └── formats.test.js      # bun test
 ```
 
@@ -120,7 +120,7 @@ curl -s "http://localhost:8788/v1beta/models/gemini-2.5-pro:generateContent" -H 
 ## 常见问题
 
 - **端口被占用（EADDRINUSE）**：`MOCK_PORT=9999 bun run server.js`，或杀掉占用 8788 的旧进程。
-- **想重置全部配置**：删掉 `config.json` 重启即可。
+- **想重置全部配置**：删掉 `mock.db` 重启，或调 `POST /__reset`。
 - **Docker 下渠道连不上**：Base URL 别用 `localhost`，用 `host.docker.internal:8788` 或 compose 服务名 `mock-upstream:8788`。
 - **命令行 curl 传中文预设名失败**：Windows 终端编码问题，与本工具无关；控制台网页（fetch UTF-8）和 new-api（发模型名）都正常。
 - **new-api 侧分组 / Tier 路由报错**：那是 new-api 自身的渠道分组或 Tier 映射问题，与本 mock 无关（检查渠道分组是否覆盖令牌所属分组/Tier）。
