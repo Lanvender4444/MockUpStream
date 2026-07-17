@@ -95,6 +95,33 @@
       <div class="hint">点预设会填入下面的表单，仍需点「保存」写入生效。</div>
     </div>
 
+    <div class="card">
+      <h2>预设管理（自定义 / 编辑 / 删除）</h2>
+      <template x-for="p in presets" :key="p.name">
+        <div style="margin-bottom:8px">
+          <div style="display:flex; gap:8px; align-items:center; margin-bottom:4px">
+            <b x-text="p.name" style="flex:1"></b>
+            <button class="sm" @click="editPreset(p)">编辑</button>
+            <button class="sm danger" @click="delPreset(p.name)">删除</button>
+          </div>
+          <template x-if="editingPreset===p.name">
+            <div>
+              <textarea x-model="presetJson" style="min-height:100px"></textarea>
+              <div class="btns" style="margin-top:6px">
+                <button class="sm primary" @click="savePreset(p.name)">保存 JSON</button>
+                <button class="sm" @click="editingPreset=''">取消</button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+      <hr style="border-color:var(--line); margin:12px 0" />
+      <div class="row"><label>新预设名</label><input x-model="newPresetName" placeholder="如: 慢速流式" /></div>
+      <div class="row"><label>patch JSON</label><textarea x-model="newPresetJson" placeholder='{"completionTokens":8000}'></textarea></div>
+      <div class="btns"><button class="primary" @click="addPreset()">添加预设</button></div>
+      <div class="hint">patch 是行为字段的子集（字段名同上方模型配置），套用时合并进模型。</div>
+    </div>
+
     <div class="card" x-show="sel">
       <h2>模型配置</h2>
       <div class="row"><label>模型名 id</label><input x-model="sel.id" /></div>
@@ -160,6 +187,7 @@ function app() {
   return {
     origin: location.origin,
     models: [], presets: [], recent: [], sel: null, toastMsg: "",
+    editingPreset: "", presetJson: "", newPresetName: "", newPresetJson: '{\n  "completionTokens": 8000\n}',
     async init() {
       await this.loadState();
       if (this.models.length) this.select(this.models[0].id);
@@ -206,6 +234,25 @@ function app() {
       else this.toast("套用失败", false);
     },
     async pollStats() { const r = await fetch("/__stats"); this.recent = (await r.json()).recent; },
+    // ---- 预设管理 ----
+    editPreset(p) { this.editingPreset = p.name; this.presetJson = JSON.stringify(p.patch, null, 2); },
+    async savePreset(name) {
+      let patch; try { patch = JSON.parse(this.presetJson); } catch (e) { this.toast("JSON 格式错误", false); return; }
+      await fetch("/__presets", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name, patch }) });
+      this.editingPreset = ""; await this.loadState(); this.toast("预设已保存");
+    },
+    async addPreset() {
+      if (!this.newPresetName.trim()) { this.toast("请填预设名", false); return; }
+      let patch; try { patch = JSON.parse(this.newPresetJson); } catch (e) { this.toast("JSON 格式错误", false); return; }
+      await fetch("/__presets", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name: this.newPresetName, patch }) });
+      this.newPresetName = ""; await this.loadState(); this.toast("预设已添加");
+    },
+    async delPreset(name) {
+      if (!confirm("删除预设 " + name + "？")) return;
+      await fetch("/__presets/" + encodeURIComponent(name), { method:"DELETE" });
+      if (this.editingPreset === name) this.editingPreset = "";
+      await this.loadState(); this.toast("预设已删除");
+    },
     endpointHint() {
       if (!this.sel) return "";
       if (this.sel.format === "openai") return "POST " + this.origin + "/v1/chat/completions";

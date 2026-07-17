@@ -36,6 +36,17 @@ export const BUILTIN_PRESETS = [
     },
   },
   {
+    name: "超长输出",
+    patch: {
+      promptMode: "auto",
+      completionTokens: 8000,
+      cacheMode: "none",
+      chunkDelayMs: 5,
+      errorStatus: 0,
+      errorRate: 0,
+    },
+  },
+  {
     name: "错误超时",
     patch: {
       errorStatus: 429,

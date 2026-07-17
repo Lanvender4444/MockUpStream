@@ -108,6 +108,15 @@ Bun.serve({
       const model = await store.applyPreset(id, name);
       return model ? json({ ok: true, model }) : json({ error: "model or preset not found" }, 404);
     }
+    if (p === "/__presets" && req.method === "POST") {
+      const { name, patch } = await req.json().catch(() => ({}));
+      const pr = await store.upsertPreset(name, patch);
+      return pr ? json({ ok: true, preset: pr }) : json({ error: "preset name required" }, 400);
+    }
+    if (p.startsWith("/__presets/") && req.method === "DELETE") {
+      await store.deletePreset(decodeURIComponent(p.slice("/__presets/".length)));
+      return json({ ok: true });
+    }
     if (p === "/__reset" && req.method === "POST") return json({ ok: true, state: await store.reset() });
 
     // ---------- 上游 API ----------

@@ -29,9 +29,16 @@ export const MODEL_DEFAULTS = {
 const COLS = Object.keys(MODEL_DEFAULTS); // 列顺序 = 字段顺序
 
 const DEFAULT_MODELS = [
+  // 大多数厂商都是 OpenAI 兼容格式(new-api 走 /v1/chat/completions);
+  // 只有 Gemini(gemini 格式) 和 Claude(claude 格式) 用不同协议。
   { ...MODEL_DEFAULTS, id: "grok-4.5", format: "openai" },
-  { ...MODEL_DEFAULTS, id: "claude-opus", format: "claude" },
+  { ...MODEL_DEFAULTS, id: "deepseek-v4-flash", format: "openai" },
+  { ...MODEL_DEFAULTS, id: "qwen3-max", format: "openai" },
+  { ...MODEL_DEFAULTS, id: "kimi-k2", format: "openai" },
+  { ...MODEL_DEFAULTS, id: "glm-4.6", format: "openai" },
+  { ...MODEL_DEFAULTS, id: "mimo-v2.5", format: "openai" },
   { ...MODEL_DEFAULTS, id: "gemini-2.5-pro", format: "gemini" },
+  { ...MODEL_DEFAULTS, id: "claude-opus-4-8", format: "claude" },
 ];
 
 let db;
@@ -136,6 +143,23 @@ export async function applyPreset(id, presetName) {
   if (!model || !prow) return null;
   const merged = { ...model, ...JSON.parse(prow.patch) };
   return writeModel(merged); // 保留原 ord(ON CONFLICT 不动 ord)
+}
+
+// 新增/编辑预设。patch 为对象(行为字段子集)。
+export async function upsertPreset(name, patch) {
+  const n = String(name || "").trim();
+  if (!n) return null;
+  const row = db.query("SELECT ord FROM presets WHERE name = ?").get(n);
+  const ord = row ? row.ord : (db.query("SELECT COALESCE(MAX(ord),-1)+1 n FROM presets").get().n || 0);
+  db.run(
+    "INSERT INTO presets (name, patch, ord) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET patch=excluded.patch",
+    [n, JSON.stringify(patch || {}), ord]
+  );
+  return { name: n, patch: patch || {} };
+}
+
+export async function deletePreset(name) {
+  db.run("DELETE FROM presets WHERE name = ?", [name]);
 }
 
 export async function reset() {

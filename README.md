@@ -58,9 +58,13 @@ docker compose up            # 项目自带 docker-compose.yml
 
 - **左栏 模型列表**：新建 / 复制 / 删除；点一行进入编辑；进页面自动选中第一个。
 - **右栏 编辑器**：改模型名、协议格式、回复内容、输入/输出/缓存 token、延迟、流式块间隔、注入错误码+概率。改完点**保存**（整表 upsert）。
-- **预设按钮**（正常基准 / 高缓存命中 / 超长上下文 / 错误超时）：点一下**一次性填满整表**，仍需点保存写入。
+- **预设按钮**（正常基准 / 高缓存命中 / 超长上下文 / 超长输出 / 错误超时）：点一下**一次性填满整表**，仍需点保存写入。
+- **预设管理**：可**新建 / 编辑（patch JSON）/ 删除**自定义预设，即时存库。
 - **Base URL / endpoint 提示**：直接复制到 new-api 渠道；Docker 下把 `localhost` 换成 `host.docker.internal`。
 - **最近请求**：实时表格，看每次调用的模型/格式/流/token/错误。
+
+> 预置了常见模型：`grok-4.5` `deepseek-v4-flash` `qwen3-max` `kimi-k2` `glm-4.6` `mimo-v2.5`（均 openai 格式）、`gemini-2.5-pro`（gemini）、`claude-opus-4-8`（claude）。
+> 注：grok/deepseek/qwen/kimi/glm/mimo 本身就是 **OpenAI 兼容格式**，所以 format=openai 是对的；只有 Gemini 和 Claude 用不同协议。新建模型可在「协议格式」下拉里改。
 
 配置写入 SQLite 库 `mock.db`，重启不丢（每次提交即时落盘，抗强杀）。
 
