@@ -4,183 +4,217 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Mock 上游控制台</title>
+<script defer src="/vendor/alpine.min.js"></script>
 <style>
   :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --fg:#e6e8ec; --mut:#9aa3b2;
-          --acc:#5b9dff; --ok:#3fb950; --warn:#e3b341; --err:#f85149; }
-  * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,"Microsoft YaHei",sans-serif;
-         background:var(--bg); color:var(--fg); }
-  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
+          --acc:#5b9dff; --ok:#3fb950; --warn:#e3b341; --err:#f85149;
+          --openai:#10a37f; --claude:#d97757; --gemini:#4285f4; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,"Microsoft YaHei",sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:13px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
   header h1 { font-size:16px; margin:0; font-weight:600; }
   header .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); box-shadow:0 0 8px var(--ok); }
   header .base { margin-left:auto; color:var(--mut); font-size:12px; font-family:ui-monospace,Consolas,monospace; }
-  .wrap { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:16px 20px; max-width:1100px; }
-  @media (max-width:860px){ .wrap{ grid-template-columns:1fr; } }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
-  .card h2 { font-size:13px; margin:0 0 12px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
-  .row { display:grid; grid-template-columns:120px 1fr; gap:10px; align-items:center; margin-bottom:10px; }
+  .layout { display:grid; grid-template-columns:260px 1fr; gap:0; height:calc(100vh - 51px); }
+  .side { border-right:1px solid var(--line); padding:14px; overflow:auto; }
+  .main { padding:16px 20px; overflow:auto; }
+  .side h2, .main h2 { font-size:12px; margin:0 0 10px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
+  .mrow { display:flex; align-items:center; gap:8px; padding:9px 10px; border:1px solid var(--line); border-radius:8px;
+          margin-bottom:7px; cursor:pointer; background:var(--panel); }
+  .mrow.active { border-color:var(--acc); box-shadow:0 0 0 1px var(--acc) inset; }
+  .mrow .name { font-weight:600; font-size:13px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .badge { font-size:10px; padding:1px 7px; border-radius:20px; font-weight:600; text-transform:uppercase; }
+  .badge.openai { background:rgba(16,163,127,.15); color:var(--openai); }
+  .badge.claude { background:rgba(217,119,87,.15); color:var(--claude); }
+  .badge.gemini { background:rgba(66,133,244,.15); color:var(--gemini); }
+  .sidebtns { display:flex; gap:6px; margin-bottom:12px; }
+  button { cursor:pointer; border:1px solid var(--line); background:#20242e; color:var(--fg); padding:7px 13px; border-radius:7px; font-size:13px; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#04122b; font-weight:600; }
+  button.sm { padding:4px 9px; font-size:12px; }
+  button.danger { color:var(--err); }
+  button:hover { filter:brightness(1.12); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .presets { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:6px; }
+  .presets button { background:#20242e; border-color:var(--line); }
+  .row { display:grid; grid-template-columns:140px 1fr; gap:10px; align-items:center; margin-bottom:10px; }
   .row label { color:var(--mut); font-size:13px; }
-  input, select, textarea { width:100%; background:#0e1016; color:var(--fg); border:1px solid var(--line);
-         border-radius:7px; padding:7px 9px; font:13px ui-monospace,Consolas,monospace; }
-  textarea { resize:vertical; min-height:52px; font-family:inherit; }
+  input, select, textarea { width:100%; background:#0e1016; color:var(--fg); border:1px solid var(--line); border-radius:7px;
+          padding:7px 9px; font:13px ui-monospace,Consolas,monospace; }
+  textarea { resize:vertical; min-height:50px; font-family:inherit; }
   input:focus, select:focus, textarea:focus { outline:none; border-color:var(--acc); }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-  .btns { display:flex; gap:10px; margin-top:6px; }
-  button { cursor:pointer; border:1px solid var(--line); background:#20242e; color:var(--fg);
-           padding:8px 16px; border-radius:7px; font-size:13px; }
-  button.primary { background:var(--acc); border-color:var(--acc); color:#04122b; font-weight:600; }
-  button:hover { filter:brightness(1.12); }
+  .btns { display:flex; gap:10px; margin-top:4px; }
   .hint { color:var(--mut); font-size:12px; margin-top:8px; }
-  pre { background:#0e1016; border:1px solid var(--line); border-radius:7px; padding:10px;
-        overflow:auto; max-height:280px; font-size:12px; margin:0; }
-  .toast { position:fixed; right:16px; bottom:16px; background:var(--ok); color:#04120a;
-           padding:9px 14px; border-radius:8px; opacity:0; transition:opacity .2s; font-weight:600; }
-  .toast.show { opacity:1; }
+  .ep { font-family:ui-monospace,Consolas,monospace; font-size:12px; background:#0e1016; border:1px solid var(--line);
+        border-radius:6px; padding:6px 9px; color:var(--acc); display:flex; align-items:center; gap:8px; }
+  .ep code { flex:1; overflow:auto; white-space:nowrap; }
   table { width:100%; border-collapse:collapse; font-size:12px; font-family:ui-monospace,Consolas,monospace; }
   td, th { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); }
   th { color:var(--mut); font-weight:500; }
   .pill { display:inline-block; padding:1px 7px; border-radius:20px; font-size:11px; }
-  .pill.err { background:rgba(248,81,73,.15); color:var(--err); }
-  .pill.ok  { background:rgba(63,185,80,.15); color:var(--ok); }
+  .pill.err { background:rgba(248,81,73,.15); color:var(--err); } .pill.ok { background:rgba(63,185,80,.15); color:var(--ok); }
+  .toast { position:fixed; right:16px; bottom:16px; background:var(--ok); color:#04120a; padding:9px 14px; border-radius:8px;
+           opacity:0; transition:opacity .2s; font-weight:600; z-index:9; }
+  .toast.show { opacity:1; }
+  pre { background:#0e1016; border:1px solid var(--line); border-radius:7px; padding:10px; overflow:auto; max-height:220px; font-size:12px; margin:0; }
 </style>
 </head>
-<body>
+<body x-data="app()" x-init="init()">
 <header>
   <span class="dot"></span>
   <h1>Mock 上游控制台</h1>
-  <span class="base" id="base"></span>
+  <span class="base" x-text="'Base URL → ' + origin"></span>
 </header>
 
-<div class="wrap">
-  <!-- 左：配置 -->
-  <div class="card">
-    <h2>输出配置（改完点保存，立即生效）</h2>
-
-    <div class="row"><label>模型 model</label><input id="model" /></div>
-    <div class="row"><label>回复内容</label><textarea id="content"></textarea></div>
-
-    <div class="row"><label>输入 token</label>
-      <div class="grid2">
-        <select id="promptMode">
-          <option value="auto">auto（按输入估算）</option>
-          <option value="fixed">fixed（固定值）</option>
-        </select>
-        <input id="promptTokens" type="number" title="promptMode=fixed 时生效" />
+<div class="layout">
+  <!-- 左：模型列表 -->
+  <div class="side">
+    <div class="sidebtns">
+      <button class="sm primary" @click="addModel()">+ 新建</button>
+      <button class="sm" @click="dupModel()" :disabled="!sel">复制</button>
+      <button class="sm danger" @click="delModel()" :disabled="!sel">删除</button>
+    </div>
+    <h2>模型（<span x-text="models.length"></span>）</h2>
+    <template x-for="m in models" :key="m.id">
+      <div class="mrow" :class="{active: sel && sel.id===m.id}" @click="select(m.id)">
+        <span class="name" x-text="m.id"></span>
+        <span class="badge" :class="m.format" x-text="m.format"></span>
       </div>
-    </div>
-
-    <div class="row"><label>输出 token</label><input id="completionTokens" type="number" /></div>
-
-    <div class="row"><label>缓存命中</label>
-      <div class="grid2">
-        <select id="cacheMode">
-          <option value="ratio">ratio（占输入比例）</option>
-          <option value="fixed">fixed（固定值）</option>
-        </select>
-        <input id="cacheRatio" type="number" step="0.05" min="0" max="1" title="ratio 模式：0~1" />
-      </div>
-    </div>
-    <div class="row"><label>缓存固定值</label><input id="cachedTokens" type="number" title="cacheMode=fixed 时生效" /></div>
-    <div class="row"><label>缓存写入(Claude)</label><input id="cacheCreationTokens" type="number" /></div>
-
-    <div class="row"><label>响应延迟 ms</label><input id="latencyMs" type="number" title="测超时/慢响应" /></div>
-    <div class="row"><label>流式块间隔 ms</label><input id="chunkDelayMs" type="number" /></div>
-
-    <div class="row"><label>注入错误码</label>
-      <div class="grid2">
-        <select id="errorStatus">
-          <option value="0">不注入</option>
-          <option value="400">400</option><option value="401">401</option>
-          <option value="403">403</option><option value="429">429</option>
-          <option value="500">500</option><option value="503">503</option>
-        </select>
-        <input id="errorRate" type="number" min="0" max="100" title="触发概率 %" />
-      </div>
-    </div>
-    <div class="row"><label>错误信息</label><input id="errorMessage" /></div>
-
-    <div class="btns">
-      <button class="primary" onclick="save()">保存配置</button>
-      <button onclick="reset()">重置默认</button>
-    </div>
-    <div class="hint">缓存命中不会超过输入 token；错误按概率触发，可先把概率设 100 强制复现。</div>
+    </template>
   </div>
 
-  <!-- 右：测试 + 记录 -->
-  <div class="card">
-    <h2>直接发测试请求</h2>
-    <div class="row"><label>流式</label>
-      <select id="testStream"><option value="0">非流式</option><option value="1">流式</option></select>
+  <!-- 右：编辑器 + 记录 -->
+  <div class="main" x-show="sel">
+    <div class="card">
+      <h2>预设（一键套用到当前模型）</h2>
+      <div class="presets">
+        <template x-for="p in presets" :key="p.name">
+          <button @click="applyPreset(p.name)" x-text="p.name"></button>
+        </template>
+      </div>
+      <div class="hint">点预设会填入下面的表单，仍需点「保存」写入生效。</div>
     </div>
-    <div class="btns">
-      <button class="primary" onclick="test()">发送到 /v1/chat/completions</button>
-      <button onclick="loadStats()">刷新记录</button>
-    </div>
-    <div class="hint">这是打 mock 自己（绕过 new-api），用来快速确认输出。真正验证计费请通过 new-api 打。</div>
-    <pre id="out" style="margin-top:12px">（测试结果显示在这里）</pre>
 
-    <h2 style="margin-top:18px">最近请求</h2>
-    <table><thead><tr><th>时间</th><th>模型</th><th>流</th><th>结果(p/c/cache)</th></tr></thead>
-      <tbody id="stats"><tr><td colspan="4" style="color:var(--mut)">暂无</td></tr></tbody>
-    </table>
+    <div class="card" x-show="sel">
+      <h2>模型配置</h2>
+      <div class="row"><label>模型名 id</label><input x-model="sel.id" /></div>
+      <div class="row"><label>协议格式</label>
+        <select x-model="sel.format">
+          <option value="openai">openai（/v1/chat/completions）</option>
+          <option value="claude">claude（/v1/messages）</option>
+          <option value="gemini">gemini（:generateContent）</option>
+        </select>
+      </div>
+      <div class="row"><label>回复内容</label><textarea x-model="sel.content"></textarea></div>
+      <div class="row"><label>输入 token</label>
+        <div class="grid2">
+          <select x-model="sel.promptMode"><option value="auto">auto（按输入估算）</option><option value="fixed">fixed（固定）</option></select>
+          <input type="number" x-model.number="sel.promptTokens" />
+        </div>
+      </div>
+      <div class="row"><label>输出 token</label><input type="number" x-model.number="sel.completionTokens" /></div>
+      <div class="row"><label>缓存命中</label>
+        <div class="grid2">
+          <select x-model="sel.cacheMode"><option value="none">none</option><option value="ratio">ratio（比例）</option><option value="fixed">fixed（固定）</option></select>
+          <input type="number" step="0.05" x-model.number="sel.cacheRatio" x-show="sel.cacheMode==='ratio'" />
+          <input type="number" x-model.number="sel.cachedTokens" x-show="sel.cacheMode==='fixed'" />
+        </div>
+      </div>
+      <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="sel.cacheCreationTokens" /></div>
+      <div class="row"><label>响应延迟 ms</label><input type="number" x-model.number="sel.latencyMs" /></div>
+      <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="sel.chunkDelayMs" /></div>
+      <div class="row"><label>注入错误码</label>
+        <div class="grid2">
+          <select x-model.number="sel.errorStatus"><option :value="0">不注入</option><option :value="400">400</option><option :value="401">401</option><option :value="403">403</option><option :value="429">429</option><option :value="500">500</option><option :value="503">503</option></select>
+          <input type="number" min="0" max="100" x-model.number="sel.errorRate" title="触发概率 %" />
+        </div>
+      </div>
+      <div class="row"><label>错误信息</label><input x-model="sel.errorMessage" /></div>
+      <div class="btns"><button class="primary" @click="saveModel()">保存</button></div>
+      <div class="hint" style="margin-top:12px">该渠道 Base URL（复制到 new-api 渠道）：</div>
+      <div class="ep"><code x-text="origin"></code><button class="sm" @click="copy(origin)">复制</button></div>
+      <div class="ep" style="margin-top:6px"><code x-text="endpointHint()"></code></div>
+      <div class="hint">Docker 下把 <code>localhost</code> 换成 <code>host.docker.internal</code>。</div>
+    </div>
+
+    <div class="card">
+      <h2>最近请求</h2>
+      <table><thead><tr><th>时间</th><th>模型</th><th>格式</th><th>流</th><th>结果</th></tr></thead>
+        <tbody>
+          <template x-for="(x,i) in recent" :key="i">
+            <tr><td x-text="x.t"></td><td x-text="x.model"></td><td><span class="badge" :class="x.format" x-text="x.format"></span></td>
+                <td x-text="x.stream?'✓':'—'"></td>
+                <td><span class="pill" :class="String(x.result).startsWith('ERR')?'err':'ok'" x-text="x.result"></span></td></tr>
+          </template>
+          <tr x-show="!recent.length"><td colspan="5" style="color:var(--mut)">暂无</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" :class="{show:toastMsg}" x-text="toastMsg" x-data="{}"></div>
 
 <script>
-const $ = (id) => document.getElementById(id);
-const FIELDS = ["model","content","promptMode","promptTokens","completionTokens",
-  "cacheMode","cacheRatio","cachedTokens","cacheCreationTokens","latencyMs",
-  "chunkDelayMs","errorStatus","errorRate","errorMessage"];
-
-$("base").textContent = "Base URL → " + location.origin;
-
-function toast(msg, ok=true){ const t=$("toast"); t.textContent=msg;
-  t.style.background = ok ? "var(--ok)" : "var(--err)"; t.style.color = ok ? "#04120a":"#2a0606";
-  t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 1600); }
-
-async function load(){
-  const r = await fetch("/__config"); const {cfg} = await r.json();
-  for(const k of FIELDS) if(cfg[k]!==undefined) $(k).value = cfg[k];
+function app() {
+  return {
+    origin: location.origin,
+    models: [], presets: [], recent: [], sel: null, toastMsg: "",
+    async init() {
+      await this.loadState();
+      if (this.models.length) this.select(this.models[0].id);
+      this.pollStats();
+      setInterval(() => this.pollStats(), 4000);
+    },
+    async loadState() {
+      const r = await fetch("/__state"); const s = await r.json();
+      this.models = s.models; this.presets = s.presets;
+      // 保持当前选中
+      if (this.sel) { const still = this.models.find(m => m.id === this.sel.id); this.sel = still ? JSON.parse(JSON.stringify(still)) : (this.models[0] ? JSON.parse(JSON.stringify(this.models[0])) : null); }
+    },
+    select(id) { const m = this.models.find(x => x.id === id); this.sel = m ? JSON.parse(JSON.stringify(m)) : null; },
+    toast(msg, ok=true) { this.toastMsg = msg; setTimeout(() => this.toastMsg = "", 1600); },
+    async saveModel() {
+      const r = await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(this.sel) });
+      if (r.ok) { const {model} = await r.json(); await this.loadState(); this.select(model.id); this.toast("已保存并生效"); }
+      else this.toast("保存失败", false);
+    },
+    async addModel() {
+      const base = { id: "new-model-" + (this.models.length+1), format:"openai", content:"mock 回复",
+        promptMode:"auto", promptTokens:100, completionTokens:30, cacheMode:"none", cacheRatio:0.5,
+        cachedTokens:0, cacheCreationTokens:0, latencyMs:0, chunkDelayMs:40, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
+      await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(base) });
+      await this.loadState(); this.select(base.id); this.toast("已新建模型");
+    },
+    async dupModel() {
+      if (!this.sel) return;
+      const copy = JSON.parse(JSON.stringify(this.sel)); copy.id = this.sel.id + "-copy";
+      await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(copy) });
+      await this.loadState(); this.select(copy.id); this.toast("已复制");
+    },
+    async delModel() {
+      if (!this.sel || !confirm("删除模型 " + this.sel.id + "？")) return;
+      await fetch("/__models/" + encodeURIComponent(this.sel.id), { method:"DELETE" });
+      this.sel = null; await this.loadState(); if (this.models.length) this.select(this.models[0].id); this.toast("已删除");
+    },
+    async applyPreset(name) {
+      if (!this.sel) return;
+      // 先确保模型已存, 再套预设(服务端合并 patch 并落盘)
+      await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(this.sel) });
+      const r = await fetch("/__models/" + encodeURIComponent(this.sel.id) + "/apply-preset", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name }) });
+      if (r.ok) { const {model} = await r.json(); await this.loadState(); this.select(model.id); this.toast("已套用预设「" + name + "」"); }
+      else this.toast("套用失败", false);
+    },
+    async pollStats() { const r = await fetch("/__stats"); this.recent = (await r.json()).recent; },
+    endpointHint() {
+      if (!this.sel) return "";
+      if (this.sel.format === "openai") return "POST " + this.origin + "/v1/chat/completions";
+      if (this.sel.format === "claude") return "POST " + this.origin + "/v1/messages";
+      return "POST " + this.origin + "/v1beta/models/" + this.sel.id + ":generateContent";
+    },
+    copy(t) { navigator.clipboard?.writeText(t); this.toast("已复制"); },
+  };
 }
-async function save(){
-  const body = {};
-  for(const k of FIELDS) body[k] = $(k).value;
-  const r = await fetch("/__config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  if(r.ok){ toast("已保存并生效"); } else { toast("保存失败", false); }
-}
-async function reset(){
-  await fetch("/__reset",{method:"POST"}); await load(); toast("已重置为默认");
-}
-async function test(){
-  const stream = $("testStream").value === "1";
-  const body = { model:$("model").value||"gpt-3.5-turbo", stream,
-                 stream_options:{include_usage:true},
-                 messages:[{role:"user",content:"控制台测试消息"}] };
-  const r = await fetch("/v1/chat/completions",{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  if(stream){
-    $("out").textContent = "";
-    const reader = r.body.getReader(); const dec = new TextDecoder();
-    while(true){ const {value,done} = await reader.read(); if(done) break;
-      $("out").textContent += dec.decode(value,{stream:true}); $("out").scrollTop=1e9; }
-  } else {
-    const j = await r.json(); $("out").textContent = JSON.stringify(j,null,2);
-  }
-  loadStats();
-}
-async function loadStats(){
-  const r = await fetch("/__stats"); const {recent} = await r.json();
-  const tb = $("stats");
-  if(!recent.length){ tb.innerHTML = '<tr><td colspan="4" style="color:var(--mut)">暂无</td></tr>'; return; }
-  tb.innerHTML = recent.map(x=>{
-    const err = String(x.result).startsWith("ERR");
-    return `<tr><td>${x.t}</td><td>${x.model}</td><td>${x.stream?"✓":"—"}</td>`+
-           `<td><span class="pill ${err?"err":"ok"}">${x.result}</span></td></tr>`;
-  }).join("");
-}
-load(); loadStats(); setInterval(loadStats, 4000);
 </script>
 </body>
 </html>
