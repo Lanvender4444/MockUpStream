@@ -1,0 +1,23 @@
+# docker-compose.yml —— 独立运行本 mock 上游（项目自带，路径无关）
+#
+# 用法（在本项目根目录）：
+#   docker compose up
+#
+# 控制台： http://localhost:8788/
+# 渠道 Base URL：
+#   - new-api 也在容器里 -> http://host.docker.internal:8788
+#   - 并入 new-api 的 compose 网络 -> http://mock-upstream:8788（服务名）
+
+services:
+  mock-upstream:
+    image: oven/bun:latest
+    container_name: mock-upstream
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - .:/app                # 挂载当前项目目录，无绝对路径
+    command: ["bun", "run", "server.js"]
+    environment:
+      - MOCK_PORT=8788
+    ports:
+      - "8788:8788"

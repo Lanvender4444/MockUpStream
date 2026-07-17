@@ -12,55 +12,44 @@
 ## 一键启动
 
 > 端口默认 **8788**，控制台 `http://localhost:8788/`。首次启动自动生成 `config.json`（含 3 个示例模型 + 4 个预设）。
+> 下面所有命令都**在本项目根目录（MockUpStream/）里执行**，用相对路径，拉到哪儿都能跑。
 
-### 情况 A：本地直接跑（mock 在宿主机）
+### 情况 A：本地直接跑（宿主机装了 bun）
 
-**Windows PowerShell**
-```powershell
-cd D:\hzmtq\.teach\MockUpStream; bun run server.js
-```
-
-**Windows CMD**
-```bat
-cd /d D:\hzmtq\.teach\MockUpStream && bun run server.js
-```
-
-**Git Bash / macOS / Linux**
+**任意平台**（在项目根目录）
 ```bash
-cd D:/hzmtq/.teach/MockUpStream && bun run server.js
+bun run server.js
 ```
 
-自定义端口：`MOCK_PORT=9999 bun run server.js`（PowerShell：`$env:MOCK_PORT=9999; bun run server.js`）。
+自定义端口：
+- Bash / macOS / Linux：`MOCK_PORT=9999 bun run server.js`
+- PowerShell：`$env:MOCK_PORT=9999; bun run server.js`
+- CMD：`set MOCK_PORT=9999 && bun run server.js`
 
 → new-api 渠道 Base URL 填 `http://localhost:8788`。
 
-### 情况 B：放进 Docker，容器访问 mock
+### 情况 B：用 Docker 跑（无需本机装 bun）
 
-一条命令用 `oven/bun` 镜像把本目录跑起来（无需本机装 bun）：
-
-**Windows PowerShell**
-```powershell
-docker run --rm -it -p 8788:8788 -v D:\hzmtq\.teach\MockUpStream:/app -w /app oven/bun:latest bun run server.js
-```
-
-**Windows CMD**
-```bat
-docker run --rm -it -p 8788:8788 -v D:\hzmtq\.teach\MockUpStream:/app -w /app oven/bun:latest bun run server.js
-```
-
-**Git Bash / macOS / Linux**
+**自带 compose（最简单）**——本项目根目录已含 `docker-compose.yml`：
 ```bash
-docker run --rm -it -p 8788:8788 -v "$PWD":/app -w /app oven/bun:latest bun run server.js
+docker compose up
 ```
 
-→ new-api 容器里渠道 Base URL 填 **`http://host.docker.internal:8788`**（Windows/Mac 的 Docker Desktop 内置该 DNS）。
+**或一条 docker run**（把当前目录挂进容器）：
+- Git Bash / macOS / Linux：
+  ```bash
+  docker run --rm -it -p 8788:8788 -v "$PWD":/app -w /app oven/bun:latest bun run server.js
+  ```
+- PowerShell：
+  ```powershell
+  docker run --rm -it -p 8788:8788 -v ${PWD}:/app -w /app oven/bun:latest bun run server.js
+  ```
+- CMD：
+  ```bat
+  docker run --rm -it -p 8788:8788 -v %cd%:/app -w /app oven/bun:latest bun run server.js
+  ```
 
-**或加入现有 compose**（推荐，走服务名）：把 `new-api/docker-compose.mock.yml` 的挂载路径指向 `../.teach/MockUpStream`，然后
-```bash
-cd D:/hzmtq/new-api
-docker compose -f docker-compose.yml -f docker-compose.mock.yml up -d
-```
-→ 渠道 Base URL 填 `http://mock-upstream:8788`（服务名，容器内网直连，最稳）。
+→ 若 new-api 也在容器里，渠道 Base URL 填 **`http://host.docker.internal:8788`**（Docker Desktop 内置该 DNS）；若把本项目并入 new-api 的 compose 网络，则用服务名 `http://mock-upstream:8788`。
 
 ---
 
@@ -104,6 +93,7 @@ MockUpStream/
 │   └── gemini.js
 ├── vendor/alpine.min.js # 本地 Alpine（无联网依赖）
 ├── panel.html           # 控制台
+├── docker-compose.yml   # 独立 Docker 运行（相对挂载）
 ├── config.json          # 持久化（自动生成，可删除以重置）
 └── formats.test.js      # bun test
 ```
@@ -134,4 +124,4 @@ curl -s "http://localhost:8788/v1beta/models/gemini-2.5-pro:generateContent" -H 
 - **想重置全部配置**：删掉 `config.json` 重启即可。
 - **Docker 下渠道连不上**：Base URL 别用 `localhost`，用 `host.docker.internal:8788` 或 compose 服务名 `mock-upstream:8788`。
 - **命令行 curl 传中文预设名失败**：Windows 终端编码问题，与本工具无关；控制台网页（fetch UTF-8）和 new-api（发模型名）都正常。
-- **new-api 侧分组 / Tier 路由报错**：那是渠道分组或 Tier 映射问题，见 `.teach/Mock/README.md` 第九节。
+- **new-api 侧分组 / Tier 路由报错**：那是 new-api 自身的渠道分组或 Tier 映射问题，与本 mock 无关（检查渠道分组是否覆盖令牌所属分组/Tier）。
