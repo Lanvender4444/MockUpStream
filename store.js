@@ -28,6 +28,19 @@ export const MODEL_DEFAULTS = {
 
 const COLS = Object.keys(MODEL_DEFAULTS); // 列顺序 = 字段顺序
 
+// 预设只承载"行为字段"(不含 id/format/content)，套用时覆盖模型对应字段。
+export const PRESET_FIELDS = COLS.filter((c) => !["id", "format", "content"].includes(c));
+
+// 规范化预设 patch: 只保留 PRESET_FIELDS + 数字字段转 number
+function normalizePatch(patch = {}) {
+  const out = {};
+  for (const k of PRESET_FIELDS) {
+    if (patch[k] === undefined) continue;
+    out[k] = typeof MODEL_DEFAULTS[k] === "number" ? Number(patch[k]) || 0 : patch[k];
+  }
+  return out;
+}
+
 const DEFAULT_MODELS = [
   // 大多数厂商都是 OpenAI 兼容格式(new-api 走 /v1/chat/completions);
   // 只有 Gemini(gemini 格式) 和 Claude(claude 格式) 用不同协议。
@@ -72,7 +85,7 @@ function seedIfEmpty() {
   const nPresets = db.query("SELECT COUNT(*) c FROM presets").get().c;
   if (nPresets === 0)
     BUILTIN_PRESETS.forEach((p, i) =>
-      db.run("INSERT INTO presets (name, patch, ord) VALUES (?, ?, ?)", [p.name, JSON.stringify(p.patch), i]));
+      db.run("INSERT INTO presets (name, patch, ord) VALUES (?, ?, ?)", [p.name, JSON.stringify(normalizePatch(p.patch)), i]));
 }
 
 // upsert 一个模型(带排序号)
@@ -141,21 +154,22 @@ export async function applyPreset(id, presetName) {
   const model = getModel(id);
   const prow = db.query("SELECT patch FROM presets WHERE name = ?").get(presetName);
   if (!model || !prow) return null;
-  const merged = { ...model, ...JSON.parse(prow.patch) };
+  const merged = { ...model, ...normalizePatch(JSON.parse(prow.patch)) };
   return writeModel(merged); // 保留原 ord(ON CONFLICT 不动 ord)
 }
 
-// 新增/编辑预设。patch 为对象(行为字段子集)。
+// 新增/编辑预设。patch 为对象；只保留行为字段。
 export async function upsertPreset(name, patch) {
   const n = String(name || "").trim();
   if (!n) return null;
+  const norm = normalizePatch(patch);
   const row = db.query("SELECT ord FROM presets WHERE name = ?").get(n);
   const ord = row ? row.ord : (db.query("SELECT COALESCE(MAX(ord),-1)+1 n FROM presets").get().n || 0);
   db.run(
     "INSERT INTO presets (name, patch, ord) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET patch=excluded.patch",
-    [n, JSON.stringify(patch || {}), ord]
+    [n, JSON.stringify(norm), ord]
   );
-  return { name: n, patch: patch || {} };
+  return { name: n, patch: norm };
 }
 
 export async function deletePreset(name) {

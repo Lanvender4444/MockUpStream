@@ -97,29 +97,47 @@
 
     <div class="card">
       <h2>预设管理（自定义 / 编辑 / 删除）</h2>
-      <template x-for="p in presets" :key="p.name">
-        <div style="margin-bottom:8px">
-          <div style="display:flex; gap:8px; align-items:center; margin-bottom:4px">
-            <b x-text="p.name" style="flex:1"></b>
-            <button class="sm" @click="editPreset(p)">编辑</button>
-            <button class="sm danger" @click="delPreset(p.name)">删除</button>
-          </div>
-          <template x-if="editingPreset===p.name">
-            <div>
-              <textarea x-model="presetJson" style="min-height:100px"></textarea>
-              <div class="btns" style="margin-top:6px">
-                <button class="sm primary" @click="savePreset(p.name)">保存 JSON</button>
-                <button class="sm" @click="editingPreset=''">取消</button>
-              </div>
+      <div class="presets" style="margin-bottom:10px; align-items:center">
+        <template x-for="p in presets" :key="p.name">
+          <span style="display:inline-flex; gap:4px; align-items:center; border:1px solid var(--line); border-radius:7px; padding:2px 2px 2px 4px">
+            <button class="sm" style="border:none; background:transparent" @click="editPreset(p)" x-text="p.name"></button>
+            <button class="sm danger" style="border:none; background:transparent; padding:2px 6px" @click="delPreset(p.name)">×</button>
+          </span>
+        </template>
+        <button class="sm primary" @click="newPreset()">+ 新建预设</button>
+      </div>
+
+      <template x-if="editingPreset">
+        <div style="border-top:1px solid var(--line); padding-top:12px">
+          <div class="row"><label>预设名</label><input x-model="presetForm.name" placeholder="预设名称" /></div>
+          <div class="row"><label>输入 token</label>
+            <div class="grid2">
+              <select x-model="presetForm.promptMode"><option value="auto">auto</option><option value="fixed">fixed</option></select>
+              <input type="number" x-model.number="presetForm.promptTokens" />
             </div>
-          </template>
+          </div>
+          <div class="row"><label>输出 token</label><input type="number" x-model.number="presetForm.completionTokens" /></div>
+          <div class="row"><label>缓存命中</label>
+            <div class="grid2">
+              <select x-model="presetForm.cacheMode"><option value="none">none</option><option value="ratio">ratio</option><option value="fixed">fixed</option></select>
+              <input type="number" step="0.05" x-model.number="presetForm.cacheRatio" x-show="presetForm.cacheMode==='ratio'" />
+              <input type="number" x-model.number="presetForm.cachedTokens" x-show="presetForm.cacheMode==='fixed'" />
+            </div>
+          </div>
+          <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="presetForm.cacheCreationTokens" /></div>
+          <div class="row"><label>响应延迟 ms</label><input type="number" x-model.number="presetForm.latencyMs" /></div>
+          <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="presetForm.chunkDelayMs" /></div>
+          <div class="row"><label>注入错误码</label>
+            <div class="grid2">
+              <select x-model.number="presetForm.errorStatus"><option :value="0">不注入</option><option :value="400">400</option><option :value="401">401</option><option :value="403">403</option><option :value="429">429</option><option :value="500">500</option><option :value="503">503</option></select>
+              <input type="number" min="0" max="100" x-model.number="presetForm.errorRate" />
+            </div>
+          </div>
+          <div class="row"><label>错误信息</label><input x-model="presetForm.errorMessage" /></div>
+          <div class="btns"><button class="primary" @click="savePresetForm()">保存预设</button><button @click="editingPreset=''">取消</button></div>
+          <div class="hint">预设是完整行为快照（不含模型名/格式/回复内容），套用即得确定结果——只改你要的字段即可。</div>
         </div>
       </template>
-      <hr style="border-color:var(--line); margin:12px 0" />
-      <div class="row"><label>新预设名</label><input x-model="newPresetName" placeholder="如: 慢速流式" /></div>
-      <div class="row"><label>patch JSON</label><textarea x-model="newPresetJson" placeholder='{"completionTokens":8000}'></textarea></div>
-      <div class="btns"><button class="primary" @click="addPreset()">添加预设</button></div>
-      <div class="hint">patch 是行为字段的子集（字段名同上方模型配置），套用时合并进模型。</div>
     </div>
 
     <div class="card" x-show="sel">
@@ -187,7 +205,7 @@ function app() {
   return {
     origin: location.origin,
     models: [], presets: [], recent: [], sel: null, toastMsg: "",
-    editingPreset: "", presetJson: "", newPresetName: "", newPresetJson: '{\n  "completionTokens": 8000\n}',
+    editingPreset: "", presetForm: {},
     async init() {
       await this.loadState();
       if (this.models.length) this.select(this.models[0].id);
@@ -234,18 +252,18 @@ function app() {
       else this.toast("套用失败", false);
     },
     async pollStats() { const r = await fetch("/__stats"); this.recent = (await r.json()).recent; },
-    // ---- 预设管理 ----
-    editPreset(p) { this.editingPreset = p.name; this.presetJson = JSON.stringify(p.patch, null, 2); },
-    async savePreset(name) {
-      let patch; try { patch = JSON.parse(this.presetJson); } catch (e) { this.toast("JSON 格式错误", false); return; }
+    // ---- 预设管理（表单，字段预填，只改想改的）----
+    presetDefaults() {
+      return { promptMode:"auto", promptTokens:100, completionTokens:30, cacheMode:"none", cacheRatio:0.5,
+        cachedTokens:0, cacheCreationTokens:0, latencyMs:0, chunkDelayMs:40, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
+    },
+    newPreset() { this.editingPreset = "__new__"; this.presetForm = { name:"", ...this.presetDefaults() }; },
+    editPreset(p) { this.editingPreset = p.name; this.presetForm = { name:p.name, ...this.presetDefaults(), ...p.patch }; },
+    async savePresetForm() {
+      const { name, ...patch } = this.presetForm;
+      if (!String(name || "").trim()) { this.toast("请填预设名", false); return; }
       await fetch("/__presets", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name, patch }) });
       this.editingPreset = ""; await this.loadState(); this.toast("预设已保存");
-    },
-    async addPreset() {
-      if (!this.newPresetName.trim()) { this.toast("请填预设名", false); return; }
-      let patch; try { patch = JSON.parse(this.newPresetJson); } catch (e) { this.toast("JSON 格式错误", false); return; }
-      await fetch("/__presets", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name: this.newPresetName, patch }) });
-      this.newPresetName = ""; await this.loadState(); this.toast("预设已添加");
     },
     async delPreset(name) {
       if (!confirm("删除预设 " + name + "？")) return;
