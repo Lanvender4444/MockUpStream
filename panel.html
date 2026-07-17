@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mock 上游控制台</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --fg:#e6e8ec; --mut:#9aa3b2;
+          --acc:#5b9dff; --ok:#3fb950; --warn:#e3b341; --err:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,"Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--fg); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); box-shadow:0 0 8px var(--ok); }
+  header .base { margin-left:auto; color:var(--mut); font-size:12px; font-family:ui-monospace,Consolas,monospace; }
+  .wrap { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:16px 20px; max-width:1100px; }
+  @media (max-width:860px){ .wrap{ grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .card h2 { font-size:13px; margin:0 0 12px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
+  .row { display:grid; grid-template-columns:120px 1fr; gap:10px; align-items:center; margin-bottom:10px; }
+  .row label { color:var(--mut); font-size:13px; }
+  input, select, textarea { width:100%; background:#0e1016; color:var(--fg); border:1px solid var(--line);
+         border-radius:7px; padding:7px 9px; font:13px ui-monospace,Consolas,monospace; }
+  textarea { resize:vertical; min-height:52px; font-family:inherit; }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--acc); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .btns { display:flex; gap:10px; margin-top:6px; }
+  button { cursor:pointer; border:1px solid var(--line); background:#20242e; color:var(--fg);
+           padding:8px 16px; border-radius:7px; font-size:13px; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#04122b; font-weight:600; }
+  button:hover { filter:brightness(1.12); }
+  .hint { color:var(--mut); font-size:12px; margin-top:8px; }
+  pre { background:#0e1016; border:1px solid var(--line); border-radius:7px; padding:10px;
+        overflow:auto; max-height:280px; font-size:12px; margin:0; }
+  .toast { position:fixed; right:16px; bottom:16px; background:var(--ok); color:#04120a;
+           padding:9px 14px; border-radius:8px; opacity:0; transition:opacity .2s; font-weight:600; }
+  .toast.show { opacity:1; }
+  table { width:100%; border-collapse:collapse; font-size:12px; font-family:ui-monospace,Consolas,monospace; }
+  td, th { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); }
+  th { color:var(--mut); font-weight:500; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:20px; font-size:11px; }
+  .pill.err { background:rgba(248,81,73,.15); color:var(--err); }
+  .pill.ok  { background:rgba(63,185,80,.15); color:var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot"></span>
+  <h1>Mock 上游控制台</h1>
+  <span class="base" id="base"></span>
+</header>
+
+<div class="wrap">
+  <!-- 左：配置 -->
+  <div class="card">
+    <h2>输出配置（改完点保存，立即生效）</h2>
+
+    <div class="row"><label>模型 model</label><input id="model" /></div>
+    <div class="row"><label>回复内容</label><textarea id="content"></textarea></div>
+
+    <div class="row"><label>输入 token</label>
+      <div class="grid2">
+        <select id="promptMode">
+          <option value="auto">auto（按输入估算）</option>
+          <option value="fixed">fixed（固定值）</option>
+        </select>
+        <input id="promptTokens" type="number" title="promptMode=fixed 时生效" />
+      </div>
+    </div>
+
+    <div class="row"><label>输出 token</label><input id="completionTokens" type="number" /></div>
+
+    <div class="row"><label>缓存命中</label>
+      <div class="grid2">
+        <select id="cacheMode">
+          <option value="ratio">ratio（占输入比例）</option>
+          <option value="fixed">fixed（固定值）</option>
+        </select>
+        <input id="cacheRatio" type="number" step="0.05" min="0" max="1" title="ratio 模式：0~1" />
+      </div>
+    </div>
+    <div class="row"><label>缓存固定值</label><input id="cachedTokens" type="number" title="cacheMode=fixed 时生效" /></div>
+    <div class="row"><label>缓存写入(Claude)</label><input id="cacheCreationTokens" type="number" /></div>
+
+    <div class="row"><label>响应延迟 ms</label><input id="latencyMs" type="number" title="测超时/慢响应" /></div>
+    <div class="row"><label>流式块间隔 ms</label><input id="chunkDelayMs" type="number" /></div>
+
+    <div class="row"><label>注入错误码</label>
+      <div class="grid2">
+        <select id="errorStatus">
+          <option value="0">不注入</option>
+          <option value="400">400</option><option value="401">401</option>
+          <option value="403">403</option><option value="429">429</option>
+          <option value="500">500</option><option value="503">503</option>
+        </select>
+        <input id="errorRate" type="number" min="0" max="100" title="触发概率 %" />
+      </div>
+    </div>
+    <div class="row"><label>错误信息</label><input id="errorMessage" /></div>
+
+    <div class="btns">
+      <button class="primary" onclick="save()">保存配置</button>
+      <button onclick="reset()">重置默认</button>
+    </div>
+    <div class="hint">缓存命中不会超过输入 token；错误按概率触发，可先把概率设 100 强制复现。</div>
+  </div>
+
+  <!-- 右：测试 + 记录 -->
+  <div class="card">
+    <h2>直接发测试请求</h2>
+    <div class="row"><label>流式</label>
+      <select id="testStream"><option value="0">非流式</option><option value="1">流式</option></select>
+    </div>
+    <div class="btns">
+      <button class="primary" onclick="test()">发送到 /v1/chat/completions</button>
+      <button onclick="loadStats()">刷新记录</button>
+    </div>
+    <div class="hint">这是打 mock 自己（绕过 new-api），用来快速确认输出。真正验证计费请通过 new-api 打。</div>
+    <pre id="out" style="margin-top:12px">（测试结果显示在这里）</pre>
+
+    <h2 style="margin-top:18px">最近请求</h2>
+    <table><thead><tr><th>时间</th><th>模型</th><th>流</th><th>结果(p/c/cache)</th></tr></thead>
+      <tbody id="stats"><tr><td colspan="4" style="color:var(--mut)">暂无</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const FIELDS = ["model","content","promptMode","promptTokens","completionTokens",
+  "cacheMode","cacheRatio","cachedTokens","cacheCreationTokens","latencyMs",
+  "chunkDelayMs","errorStatus","errorRate","errorMessage"];
+
+$("base").textContent = "Base URL → " + location.origin;
+
+function toast(msg, ok=true){ const t=$("toast"); t.textContent=msg;
+  t.style.background = ok ? "var(--ok)" : "var(--err)"; t.style.color = ok ? "#04120a":"#2a0606";
+  t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 1600); }
+
+async function load(){
+  const r = await fetch("/__config"); const {cfg} = await r.json();
+  for(const k of FIELDS) if(cfg[k]!==undefined) $(k).value = cfg[k];
+}
+async function save(){
+  const body = {};
+  for(const k of FIELDS) body[k] = $(k).value;
+  const r = await fetch("/__config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(r.ok){ toast("已保存并生效"); } else { toast("保存失败", false); }
+}
+async function reset(){
+  await fetch("/__reset",{method:"POST"}); await load(); toast("已重置为默认");
+}
+async function test(){
+  const stream = $("testStream").value === "1";
+  const body = { model:$("model").value||"gpt-3.5-turbo", stream,
+                 stream_options:{include_usage:true},
+                 messages:[{role:"user",content:"控制台测试消息"}] };
+  const r = await fetch("/v1/chat/completions",{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(stream){
+    $("out").textContent = "";
+    const reader = r.body.getReader(); const dec = new TextDecoder();
+    while(true){ const {value,done} = await reader.read(); if(done) break;
+      $("out").textContent += dec.decode(value,{stream:true}); $("out").scrollTop=1e9; }
+  } else {
+    const j = await r.json(); $("out").textContent = JSON.stringify(j,null,2);
+  }
+  loadStats();
+}
+async function loadStats(){
+  const r = await fetch("/__stats"); const {recent} = await r.json();
+  const tb = $("stats");
+  if(!recent.length){ tb.innerHTML = '<tr><td colspan="4" style="color:var(--mut)">暂无</td></tr>'; return; }
+  tb.innerHTML = recent.map(x=>{
+    const err = String(x.result).startsWith("ERR");
+    return `<tr><td>${x.t}</td><td>${x.model}</td><td>${x.stream?"✓":"—"}</td>`+
+           `<td><span class="pill ${err?"err":"ok"}">${x.result}</span></td></tr>`;
+  }).join("");
+}
+load(); loadStats(); setInterval(loadStats, 4000);
+</script>
+</body>
+</html>
