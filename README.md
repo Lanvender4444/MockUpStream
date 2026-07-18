@@ -52,7 +52,35 @@ docker compose up            # 项目自带 docker-compose.yml
 >
 > 验证容器能否连到 mock：`docker exec -it new-api sh -c "wget -qO- http://host.docker.internal:8788/v1/models"`，返回模型列表即通。
 
+## New-API 界面配置
+浏览器打开前端 → 用 root + 首启密码登录：
 
+### 1. 建渠道（Channels）
+
+    类型：OpenAI
+    代理 / Base URL：http://localhost:8788 ← 指向 mock
+    密钥：随便填，如 sk-mock
+    模型：gpt-3.5-turbo,gpt-4o
+    保存后可点「测试」按钮（mock 的 /v1/models 会响应）
+
+### 2. 配模型倍率（Model Ratio / 运营设置）
+
+    确保 gpt-3.5-turbo 配了 modelRatio / completionRatio / cacheRatio
+    否则会报「模型倍率或价格未配置」（relay/helper/price.go:78）
+
+### 3. 建令牌（Tokens）
+
+    新建 → 复制出 sk-xxx
+
+### 4. 修改 TierGroups
+
+系统设置 → 倍率设置 修改TierGroups
+
+{
+  "dev": {"groups": ["default"]},
+  "pro": {"groups": ["default", "vip"]},
+  "ent": {"groups": ["default", "vip", "svip"]}
+}
 
 ---
 
