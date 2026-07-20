@@ -19,5 +19,8 @@ services:
     command: ["bun", "run", "server.js"]
     environment:
       - MOCK_PORT=8788
+      # 局域网/公网访问身份验证（可选；也可以直接在面板"网络与安全"里设置，不需要改这里重启容器）：
+      # - MOCK_ADMIN_PASSWORD=change-me
+      # - MOCK_TRUSTED_IPS=^192\.168\.
     ports:
       - "8788:8788"

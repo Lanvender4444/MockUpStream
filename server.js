@@ -7,8 +7,15 @@
 //   Claude  渠道 -> http://localhost:8788           (打 /v1/messages)
 //   Gemini  渠道 -> http://localhost:8788           (打 /v1beta/models/{m}:generateContent)
 //   Docker 下把 localhost 换成 host.docker.internal 或 compose 服务名。
+//
+// 局域网/公网访问 + 控制台身份验证：
+//   面板"网络与安全"区块可设置管理密码 + 信任 IP 正则，落库 mock.db，改完立即生效。
+//   也可用环境变量在启动时写入/覆盖： MOCK_ADMIN_PASSWORD / MOCK_TRUSTED_IPS
+//   未设置密码时，控制台和 /v1/* 一样保持完全开放（不影响现有本地用法）。
 
+import { networkInterfaces } from "os";
 import * as store from "./store.js";
+import * as auth from "./auth.js";
 import { shouldInjectError } from "./usage.js";
 import * as openai from "./formats/openai.js";
 import * as claude from "./formats/claude.js";
@@ -23,6 +30,61 @@ const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "X-Mock-Upstream": "1" } });
 
 await store.load();
+
+// 环境变量引导：设置了就每次启动覆盖 DB 中的密码/信任正则；不设置则以 DB(面板改的)为准。
+if (process.env.MOCK_ADMIN_PASSWORD) {
+  store.setAuthConfig({ passwordHash: await auth.hashPassword(process.env.MOCK_ADMIN_PASSWORD) });
+}
+if (process.env.MOCK_TRUSTED_IPS) {
+  store.setAuthConfig({ trustedIpsRegex: process.env.MOCK_TRUSTED_IPS });
+}
+
+function lanIps() {
+  const nets = networkInterfaces();
+  const out = [];
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === "IPv4" && !net.internal) out.push(net.address);
+    }
+  }
+  return out;
+}
+
+function loginPageHtml() {
+  return `<!doctype html>
+<html lang="zh"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>登录 · Mock 上游控制台</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#0f1115; color:#e6e8ec; font:14px/1.5 -apple-system,Segoe UI,Roboto,"Microsoft YaHei",sans-serif; }
+  form { background:#181b22; border:1px solid #2a2f3a; border-radius:10px; padding:28px; width:280px; }
+  h1 { font-size:15px; margin:0 0 16px; }
+  input { width:100%; background:#0e1016; color:#e6e8ec; border:1px solid #2a2f3a; border-radius:7px;
+          padding:9px 10px; font-size:13px; box-sizing:border-box; margin-bottom:10px; }
+  button { width:100%; background:#5b9dff; border:none; color:#04122b; font-weight:600; padding:9px; border-radius:7px; cursor:pointer; }
+  .err { color:#f85149; font-size:12px; min-height:16px; margin-bottom:8px; }
+</style></head>
+<body>
+<form id="f">
+  <h1>Mock 上游控制台 · 登录</h1>
+  <div class="err" id="err"></div>
+  <input type="password" id="pw" placeholder="管理密码" autofocus />
+  <button type="submit">登录</button>
+</form>
+<script>
+document.getElementById("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = document.getElementById("err");
+  err.textContent = "";
+  const r = await fetch("/__auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: document.getElementById("pw").value }) });
+  if (r.ok) { location.href = "/"; return; }
+  if (r.status === 429) { const d = await r.json(); err.textContent = "失败次数过多，请 " + Math.ceil(d.retryAfterMs / 60000) + " 分钟后再试"; return; }
+  err.textContent = "密码错误";
+});
+</script>
+</body></html>`;
+}
 
 // 通用: 处理一次上游请求(某格式)
 async function handleUpstream(fmtName, fmt, req, url) {
@@ -81,9 +143,62 @@ function usageTag(fmtName, resp) {
 
 Bun.serve({
   port: PORT,
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
     const p = url.pathname;
+
+    // ---------- 身份验证网关：控制台页面 + 全部 /__* 管理接口 ----------
+    const authExempt = p === "/__auth/login" || p === "/__auth/status" || p === "/vendor/alpine.min.js";
+    const authGated = !authExempt && (p === "/" || p === "/index.html" || p.startsWith("/__"));
+    if (authGated) {
+      const access = auth.checkAccess(req, server, store.getAuthConfig());
+      if (!access.allowed) {
+        if (p === "/" || p === "/index.html")
+          return new Response(loginPageHtml(), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+        return json({ error: "unauthorized" }, 401);
+      }
+    }
+
+    // ---------- 认证相关路由 ----------
+    if (p === "/__auth/status" && req.method === "GET") {
+      const cfg = store.getAuthConfig();
+      return json({
+        passwordSet: !!cfg.passwordHash,
+        trustedByIp: cfg.passwordHash ? auth.isTrustedIp(auth.getClientIp(req, server), cfg) : true,
+        authenticated: auth.hasValidSession(req),
+        trustedIpsRegex: cfg.trustedIpsRegex,
+      });
+    }
+    if (p === "/__auth/login" && req.method === "POST") {
+      const ip = auth.getClientIp(req, server);
+      const remain = auth.isLocked(ip);
+      if (remain > 0) return json({ error: "locked", retryAfterMs: remain }, 429);
+      const { password } = await req.json().catch(() => ({}));
+      const cfg = store.getAuthConfig();
+      const ok = await auth.verifyPassword(password || "", cfg.passwordHash);
+      if (!ok) { auth.recordFailure(ip); return json({ error: "bad password" }, 401); }
+      auth.recordSuccess(ip);
+      const token = auth.createSession();
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Set-Cookie": auth.sessionCookieHeader(token) },
+      });
+    }
+    if (p === "/__auth/logout" && req.method === "POST") {
+      auth.destroySession(req);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Set-Cookie": auth.clearSessionCookieHeader() },
+      });
+    }
+    if (p === "/__auth/config" && req.method === "POST") {
+      const { password, trustedIpsRegex } = await req.json().catch(() => ({}));
+      const patch = {};
+      if (typeof trustedIpsRegex === "string") patch.trustedIpsRegex = trustedIpsRegex.trim() || null;
+      if (password) patch.passwordHash = await auth.hashPassword(password);
+      const next = store.setAuthConfig(patch);
+      return json({ ok: true, passwordSet: !!next.passwordHash, trustedIpsRegex: next.trustedIpsRegex });
+    }
 
     // ---------- 控制台前端 ----------
     if (p === "/" || p === "/index.html")
@@ -92,7 +207,7 @@ Bun.serve({
       return new Response(Bun.file(import.meta.dir + "/vendor/alpine.min.js"), { headers: { "Content-Type": "text/javascript" } });
 
     // ---------- 管理 API ----------
-    if (p === "/__state") return json({ ...store.getState(), port: PORT });
+    if (p === "/__state") return json({ ...store.getState(), port: PORT, lanIps: lanIps() });
     if (p === "/__stats") return json({ recent });
     if (p === "/__models" && req.method === "POST") {
       const m = await req.json().catch(() => ({}));
@@ -145,3 +260,6 @@ console.log(`mock upstream listening on http://localhost:${PORT}`);
 console.log(`→ 控制台:      http://localhost:${PORT}/`);
 console.log(`→ 渠道 Base URL: http://localhost:${PORT}   (Docker: http://host.docker.internal:${PORT})`);
 console.log(`  OpenAI /v1/chat/completions · Claude /v1/messages · Gemini /v1beta/models/{m}:generateContent`);
+if (!store.getAuthConfig().passwordHash) {
+  console.log(`  提醒: 控制台尚未设置密码，谁都能访问和修改配置。要给局域网/公网同事用之前，去面板"网络与安全"设一个。`);
+}
