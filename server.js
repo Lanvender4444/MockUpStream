@@ -44,23 +44,41 @@ function lanIps() {
 function loginPageHtml() {
   return `<!doctype html>
 <html lang="zh"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>登录 · Mock 上游控制台</title>
+<title>Log In · mockupstream</title>
 <style>
+  @font-face { font-family:"JetBrains Mono"; src:url("/vendor/jetbrains-mono/JetBrainsMono-Regular.woff2") format("woff2"); font-weight:400; font-style:normal; font-display:swap; }
+  @font-face { font-family:"JetBrains Mono"; src:url("/vendor/jetbrains-mono/JetBrainsMono-Medium.woff2") format("woff2"); font-weight:500; font-style:normal; font-display:swap; }
+  @font-face { font-family:"JetBrains Mono"; src:url("/vendor/jetbrains-mono/JetBrainsMono-SemiBold.woff2") format("woff2"); font-weight:600; font-style:normal; font-display:swap; }
+  :root { --bg:#1e1f22; --panel:#2b2d30; --border:#393b40; --fg:#dfe1e5; --mut:#8b8f97; --accent:#3574f0; --err:#db5c5c; }
+  * { box-sizing:border-box; }
   body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-         background:#0f1115; color:#e6e8ec; font:14px/1.5 -apple-system,Segoe UI,Roboto,"Microsoft YaHei",sans-serif; }
-  form { background:#181b22; border:1px solid #2a2f3a; border-radius:10px; padding:28px; width:280px; }
-  h1 { font-size:15px; margin:0 0 16px; }
-  input { width:100%; background:#0e1016; color:#e6e8ec; border:1px solid #2a2f3a; border-radius:7px;
-          padding:9px 10px; font-size:13px; box-sizing:border-box; margin-bottom:10px; }
-  button { width:100%; background:#5b9dff; border:none; color:#04122b; font-weight:600; padding:9px; border-radius:7px; cursor:pointer; }
-  .err { color:#f85149; font-size:12px; min-height:16px; margin-bottom:8px; }
+         background:var(--bg); color:var(--fg);
+         font-family:"JetBrains Mono",ui-monospace,"Cascadia Code","SFMono-Regular",Consolas,monospace; font-size:12.5px; }
+  form { background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:0; width:340px; box-shadow:0 8px 32px rgba(0,0,0,.4); }
+  .titlebar { padding:11px 16px; border-bottom:1px solid var(--border); color:var(--fg); font-size:12px; font-weight:600; }
+  .body { padding:20px 20px 22px; }
+  .sub { color:var(--mut); font-size:11.5px; margin:0 0 16px; }
+  label { display:block; color:var(--mut); font-size:11px; margin-bottom:6px; text-transform:uppercase; letter-spacing:.05em; font-weight:600; }
+  input { width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:5px;
+          padding:8px 10px; font:12.5px "JetBrains Mono",ui-monospace,Consolas,monospace; margin-bottom:6px; }
+  input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(53,116,240,.14); }
+  .hint { color:var(--mut); font-size:11px; margin:0 0 16px; line-height:1.5; }
+  button { width:100%; background:var(--accent); border:1px solid var(--accent); color:#fff; font-weight:500; padding:8px;
+           border-radius:5px; cursor:pointer; font-family:inherit; font-size:12.5px; }
+  button:hover { background:#4682f5; }
+  .err { color:var(--err); font-size:12px; min-height:16px; margin:0 0 10px; }
 </style></head>
 <body>
 <form id="f">
-  <h1>Mock 上游控制台 · 登录</h1>
-  <div class="err" id="err"></div>
-  <input type="password" id="pw" placeholder="管理密码" autofocus />
-  <button type="submit">登录</button>
+  <div class="titlebar">mockupstream</div>
+  <div class="body">
+    <p class="sub">控制台已启用密码保护</p>
+    <div class="err" id="err"></div>
+    <label for="pw">Password</label>
+    <input type="password" id="pw" placeholder="••••••••" autocomplete="off" autofocus />
+    <p class="hint">密码只经服务端 bcrypt 校验一次性传输，不写入 localStorage / Cookie 明文，浏览器也不会缓存这个值。</p>
+    <button type="submit">Log In</button>
+  </div>
 </form>
 <script>
 document.getElementById("f").addEventListener("submit", async (e) => {
@@ -70,8 +88,9 @@ document.getElementById("f").addEventListener("submit", async (e) => {
   const r = await fetch("/__auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password: document.getElementById("pw").value }) });
   if (r.ok) { location.href = "/"; return; }
-  if (r.status === 429) { const d = await r.json(); err.textContent = "失败次数过多，请 " + Math.ceil(d.retryAfterMs / 60000) + " 分钟后再试"; return; }
+  if (r.status === 429) { const d = await r.json(); err.textContent = "失败次数过多，" + Math.ceil(d.retryAfterMs / 60000) + " 分钟后再试"; return; }
   err.textContent = "密码错误";
+  document.getElementById("pw").value = "";
 });
 </script>
 </body></html>`;
@@ -139,7 +158,7 @@ Bun.serve({
     const p = url.pathname;
 
     // ---------- 身份验证网关：控制台页面 + 全部 /__* 管理接口 ----------
-    const authExempt = p === "/__auth/login" || p === "/__auth/status" || p === "/vendor/alpine.min.js";
+    const authExempt = p === "/__auth/login" || p === "/__auth/status" || p.startsWith("/vendor/");
     const authGated = !authExempt && (p === "/" || p === "/index.html" || p.startsWith("/__"));
     if (authGated) {
       const access = auth.checkAccess(req, server, store.getAuthConfig());
@@ -157,8 +176,8 @@ Bun.serve({
         passwordSet: !!cfg.passwordHash,
         trustedByIp: cfg.passwordHash ? auth.isTrustedIp(auth.getClientIp(req, server), cfg) : true,
         authenticated: auth.hasValidSession(req),
-        lanTrustRegex: cfg.lanTrustRegex,
-        publicTrustRegex: cfg.publicTrustRegex,
+        lan: cfg.lan,
+        public: cfg.public,
       });
     }
     if (p === "/__auth/login" && req.method === "POST") {
@@ -184,20 +203,35 @@ Bun.serve({
       });
     }
     if (p === "/__auth/config" && req.method === "POST") {
-      const { password, lanTrustRegex, publicTrustRegex } = await req.json().catch(() => ({}));
+      const body = await req.json().catch(() => ({}));
       const patch = {};
-      if (typeof lanTrustRegex === "string") patch.lanTrustRegex = lanTrustRegex.trim() || null;
-      if (typeof publicTrustRegex === "string") patch.publicTrustRegex = publicTrustRegex.trim() || null;
-      if (password) patch.passwordHash = await auth.hashPassword(password);
+      if (body.password) patch.passwordHash = await auth.hashPassword(body.password);
+      if (body.lan && typeof body.lan === "object") {
+        patch.lan = {};
+        if (auth.TRUST_MODES.includes(body.lan.mode)) patch.lan.mode = body.lan.mode;
+        if (typeof body.lan.list === "string") patch.lan.list = body.lan.list.trim() || null;
+      }
+      if (body.public && typeof body.public === "object") {
+        patch.public = {};
+        if (auth.TRUST_MODES.includes(body.public.mode)) patch.public.mode = body.public.mode;
+        if (typeof body.public.list === "string") patch.public.list = body.public.list.trim() || null;
+      }
       const next = store.setAuthConfig(patch);
-      return json({ ok: true, passwordSet: !!next.passwordHash, lanTrustRegex: next.lanTrustRegex, publicTrustRegex: next.publicTrustRegex });
+      return json({ ok: true, passwordSet: !!next.passwordHash, lan: next.lan, public: next.public });
     }
 
     // ---------- 控制台前端 ----------
     if (p === "/" || p === "/index.html")
       return new Response(Bun.file(import.meta.dir + "/panel.html"), { headers: { "Content-Type": "text/html; charset=utf-8" } });
-    if (p === "/vendor/alpine.min.js")
-      return new Response(Bun.file(import.meta.dir + "/vendor/alpine.min.js"), { headers: { "Content-Type": "text/javascript" } });
+    if (p.startsWith("/vendor/")) {
+      const rel = p.slice("/vendor/".length);
+      if (rel.includes("..")) return new Response("forbidden", { status: 403 });
+      const ext = rel.split(".").pop();
+      const type = { js: "text/javascript", woff2: "font/woff2", txt: "text/plain" }[ext] || "application/octet-stream";
+      const file = Bun.file(import.meta.dir + "/vendor/" + rel);
+      if (!(await file.exists())) return new Response("not found", { status: 404 });
+      return new Response(file, { headers: { "Content-Type": type } });
+    }
 
     // ---------- 管理 API ----------
     if (p === "/__state") return json({ ...store.getState(), port: PORT, lanIps: lanIps() });

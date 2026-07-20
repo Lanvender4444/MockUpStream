@@ -1,28 +1,41 @@
-// auth.js —— 局域网/公网访问身份验证：IP 信任判断、密码哈希、session、限流。
+// auth.js —— 局域网/公网访问身份验证：IP 分类 + 信任策略、密码哈希、session、限流。
 // 不依赖 store.js（配置以参数传入），方便单测。
 
 export const DEFAULT_PRIVATE_IP_REGEX_SOURCE =
   "^(127\\.|10\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\.|::1$|::ffff:127\\.|::ffff:10\\.|::ffff:192\\.168\\.)";
+
+export const TRUST_MODES = ["allow-all", "deny-all", "whitelist", "blacklist"];
 
 export function getClientIp(req, server) {
   const addr = server && typeof server.requestIP === "function" ? server.requestIP(req) : null;
   return (addr && addr.address) || "unknown";
 }
 
-function testRegexSafe(source, ip) {
-  try { return new RegExp(source).test(ip); }
-  catch { return new RegExp(DEFAULT_PRIVATE_IP_REGEX_SOURCE).test(ip); }
+// 纯粹的地址分类(是不是私网/回环) —— 不是信任判断本身, 只用来决定走 lan 策略还是 public 策略。
+export function isPrivateIp(ip) {
+  return new RegExp(DEFAULT_PRIVATE_IP_REGEX_SOURCE).test(ip);
 }
 
-// 局域网信任: 默认私网正则, 可在面板里改成自定义正则(narrow/adjust "局域网"的定义)。
-// 公网白名单: 默认空(不信任任何公网来源), 需要手动加。
-// 两者是并集关系, 命中任意一个就放行 —— 不是"自定义覆盖默认值"。
+function testRegexSafe(source, ip) {
+  if (!source) return false;
+  try { return new RegExp(source).test(ip); } catch { return false; }
+}
+
+// policy: { mode: "allow-all"|"deny-all"|"whitelist"|"blacklist", list: string|null(正则) }
+function evalPolicy(policy, ip) {
+  const mode = (policy && policy.mode) || "deny-all";
+  if (mode === "allow-all") return true;
+  if (mode === "deny-all") return false;
+  if (mode === "whitelist") return testRegexSafe(policy.list, ip);
+  if (mode === "blacklist") return !testRegexSafe(policy.list, ip);
+  return false;
+}
+
+// 局域网来源走 authConfig.lan 策略, 公网来源走 authConfig.public 策略 —— 两条策略完全独立存储、互不覆盖。
 export function isTrustedIp(ip, authConfig) {
   const cfg = authConfig || {};
-  const lanSource = cfg.lanTrustRegex || DEFAULT_PRIVATE_IP_REGEX_SOURCE;
-  if (testRegexSafe(lanSource, ip)) return true;
-  if (cfg.publicTrustRegex && testRegexSafe(cfg.publicTrustRegex, ip)) return true;
-  return false;
+  const policy = isPrivateIp(ip) ? cfg.lan : cfg.public;
+  return evalPolicy(policy, ip);
 }
 
 export async function hashPassword(password) {
