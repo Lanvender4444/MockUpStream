@@ -80,3 +80,11 @@ export function recordFailure(ip) {
 export function recordSuccess(ip) {
   loginAttempts.delete(ip);
 }
+
+export function checkAccess(req, server, authConfig) {
+  if (!authConfig || !authConfig.passwordHash) return { allowed: true, reason: "open" };
+  const ip = getClientIp(req, server);
+  if (isTrustedIp(ip, authConfig)) return { allowed: true, reason: "trusted-ip" };
+  if (hasValidSession(req)) return { allowed: true, reason: "session" };
+  return { allowed: false, reason: "unauthenticated" };
+}

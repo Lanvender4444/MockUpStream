@@ -116,3 +116,32 @@ test("recordSuccess: 清空失败计数, 之前的失败不会累加进下一轮
   auth.recordFailure(ip); // 清空后只失败了 1 次
   expect(auth.isLocked(ip)).toBe(0);
 });
+
+test("checkAccess: 未设置密码 => 直接放行(reason=open)", () => {
+  const req = new Request("http://x/");
+  const server = { requestIP: () => ({ address: "8.8.8.8" }) };
+  const result = auth.checkAccess(req, server, { passwordHash: null, trustedIpsRegex: null });
+  expect(result).toEqual({ allowed: true, reason: "open" });
+});
+
+test("checkAccess: 设置密码 + 信任 IP => 放行(reason=trusted-ip)", () => {
+  const req = new Request("http://x/");
+  const server = { requestIP: () => ({ address: "192.168.1.5" }) };
+  const result = auth.checkAccess(req, server, { passwordHash: "h", trustedIpsRegex: null });
+  expect(result).toEqual({ allowed: true, reason: "trusted-ip" });
+});
+
+test("checkAccess: 设置密码 + 非信任 IP + 无 session => 拒绝", () => {
+  const req = new Request("http://x/");
+  const server = { requestIP: () => ({ address: "8.8.8.8" }) };
+  const result = auth.checkAccess(req, server, { passwordHash: "h", trustedIpsRegex: null });
+  expect(result).toEqual({ allowed: false, reason: "unauthenticated" });
+});
+
+test("checkAccess: 设置密码 + 非信任 IP + 有效 session => 放行(reason=session)", () => {
+  const token = auth.createSession();
+  const req = new Request("http://x/", { headers: { cookie: `mock_session=${token}` } });
+  const server = { requestIP: () => ({ address: "8.8.8.8" }) };
+  const result = auth.checkAccess(req, server, { passwordHash: "h", trustedIpsRegex: null });
+  expect(result).toEqual({ allowed: true, reason: "session" });
+});
