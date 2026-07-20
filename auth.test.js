@@ -92,3 +92,27 @@ test("hasValidSession: 多个 cookie 混在一起也能正确解析", () => {
   const req = new Request("http://x/", { headers: { cookie: `foo=bar; mock_session=${token}; baz=qux` } });
   expect(auth.hasValidSession(req)).toBe(true);
 });
+
+test("isLocked: 初始未锁定", () => {
+  expect(auth.isLocked("203.0.113.1")).toBe(0);
+});
+
+test("recordFailure: 连续 5 次失败后锁定", () => {
+  const ip = "203.0.113.2";
+  for (let i = 0; i < 5; i++) auth.recordFailure(ip);
+  expect(auth.isLocked(ip)).toBeGreaterThan(0);
+});
+
+test("recordFailure: 不满 5 次不锁定", () => {
+  const ip = "203.0.113.3";
+  for (let i = 0; i < 4; i++) auth.recordFailure(ip);
+  expect(auth.isLocked(ip)).toBe(0);
+});
+
+test("recordSuccess: 清空失败计数, 之前的失败不会累加进下一轮", () => {
+  const ip = "203.0.113.4";
+  for (let i = 0; i < 4; i++) auth.recordFailure(ip);
+  auth.recordSuccess(ip);
+  auth.recordFailure(ip); // 清空后只失败了 1 次
+  expect(auth.isLocked(ip)).toBe(0);
+});

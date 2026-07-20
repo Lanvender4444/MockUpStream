@@ -57,3 +57,26 @@ export function sessionCookieHeader(token) {
 export function clearSessionCookieHeader() {
   return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
+
+const loginAttempts = new Map(); // ip -> { fails, lockedUntil }
+const MAX_LOGIN_FAILS = 5;
+const LOCK_MS = 15 * 60 * 1000;
+
+export function isLocked(ip) {
+  const rec = loginAttempts.get(ip);
+  if (!rec || !rec.lockedUntil) return 0;
+  const remain = rec.lockedUntil - Date.now();
+  if (remain <= 0) { loginAttempts.delete(ip); return 0; }
+  return remain;
+}
+
+export function recordFailure(ip) {
+  const rec = loginAttempts.get(ip) || { fails: 0, lockedUntil: 0 };
+  rec.fails += 1;
+  if (rec.fails >= MAX_LOGIN_FAILS) { rec.lockedUntil = Date.now() + LOCK_MS; rec.fails = 0; }
+  loginAttempts.set(ip, rec);
+}
+
+export function recordSuccess(ip) {
+  loginAttempts.delete(ip);
+}
