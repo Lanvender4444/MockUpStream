@@ -85,6 +85,7 @@ docker compose up            # 项目自带 docker-compose.yml
 }
 ```
 
+
 ---
 
 ## 控制台用法
@@ -131,6 +132,9 @@ curl http://localhost:3000/v1/chat/completions \
   -d '{"model":"gpt-3.5-turbo","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"测试"}]}'
 ```
 
+## 团队合作
+
+别忘了打开防火墙的 8788 端口
 
 
 ### PowerShell
