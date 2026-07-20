@@ -64,3 +64,31 @@ test("hashPassword / verifyPassword: 正确密码校验通过, 错误密码不�
 test("verifyPassword: hash 为 null 时始终返回 false", async () => {
   expect(await auth.verifyPassword("anything", null)).toBe(false);
 });
+
+test("createSession / hasValidSession: 带正确 cookie 才算已登录", () => {
+  const token = auth.createSession();
+  const reqNoCookie = new Request("http://x/");
+  expect(auth.hasValidSession(reqNoCookie)).toBe(false);
+  const reqWithCookie = new Request("http://x/", { headers: { cookie: `mock_session=${token}` } });
+  expect(auth.hasValidSession(reqWithCookie)).toBe(true);
+});
+
+test("destroySession: 登出后同一 token 的 session 失效", () => {
+  const token = auth.createSession();
+  const req = new Request("http://x/", { headers: { cookie: `mock_session=${token}` } });
+  expect(auth.hasValidSession(req)).toBe(true);
+  auth.destroySession(req);
+  expect(auth.hasValidSession(req)).toBe(false);
+});
+
+test("sessionCookieHeader / clearSessionCookieHeader: 生成对应的 Set-Cookie 值", () => {
+  expect(auth.sessionCookieHeader("abc123")).toContain("mock_session=abc123");
+  expect(auth.sessionCookieHeader("abc123")).toContain("HttpOnly");
+  expect(auth.clearSessionCookieHeader()).toContain("Max-Age=0");
+});
+
+test("hasValidSession: 多个 cookie 混在一起也能正确解析", () => {
+  const token = auth.createSession();
+  const req = new Request("http://x/", { headers: { cookie: `foo=bar; mock_session=${token}; baz=qux` } });
+  expect(auth.hasValidSession(req)).toBe(true);
+});

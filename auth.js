@@ -24,3 +24,36 @@ export async function verifyPassword(password, hash) {
   if (!hash) return false;
   try { return await Bun.password.verify(password, hash); } catch { return false; }
 }
+
+const sessions = new Map(); // token -> createdAt(ms)
+const SESSION_COOKIE_NAME = "mock_session";
+
+export function createSession() {
+  const token = crypto.randomUUID();
+  sessions.set(token, Date.now());
+  return token;
+}
+
+function getSessionToken(req) {
+  const cookie = req.headers.get("cookie") || "";
+  const match = cookie.split(";").map((s) => s.trim()).find((s) => s.startsWith(SESSION_COOKIE_NAME + "="));
+  return match ? match.slice(SESSION_COOKIE_NAME.length + 1) : null;
+}
+
+export function hasValidSession(req) {
+  const token = getSessionToken(req);
+  return !!token && sessions.has(token);
+}
+
+export function destroySession(req) {
+  const token = getSessionToken(req);
+  if (token) sessions.delete(token);
+}
+
+export function sessionCookieHeader(token) {
+  return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax`;
+}
+
+export function clearSessionCookieHeader() {
+  return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
