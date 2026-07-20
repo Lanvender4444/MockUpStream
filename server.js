@@ -7,8 +7,14 @@
 //   Claude  渠道 -> http://localhost:8788           (打 /v1/messages)
 //   Gemini  渠道 -> http://localhost:8788           (打 /v1beta/models/{m}:generateContent)
 //   Docker 下把 localhost 换成 host.docker.internal 或 compose 服务名。
+//
+// 局域网/公网访问 + 控制台身份验证：
+//   面板"网络与安全"区块可设置管理密码 + 信任 IP 正则，落库 mock.db（重启不丢，跟模型/预设一样）。
+//   未设置密码时，控制台和 /v1/* 一样保持完全开放（不影响现有本地用法）。
 
+import { networkInterfaces } from "os";
 import * as store from "./store.js";
+import * as auth from "./auth.js";
 import { shouldInjectError } from "./usage.js";
 import * as openai from "./formats/openai.js";
 import * as claude from "./formats/claude.js";
@@ -23,6 +29,72 @@ const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "X-Mock-Upstream": "1" } });
 
 await store.load();
+
+function lanIps() {
+  const nets = networkInterfaces();
+  const out = [];
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === "IPv4" && !net.internal) out.push(net.address);
+    }
+  }
+  return out;
+}
+
+function loginPageHtml() {
+  return `<!doctype html>
+<html lang="zh"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Log In · mockupstream</title>
+<style>
+  @font-face { font-family:"JetBrains Mono"; src:url("/vendor/jetbrains-mono/JetBrainsMono-Regular.woff2") format("woff2"); font-weight:400; font-style:normal; font-display:swap; }
+  @font-face { font-family:"JetBrains Mono"; src:url("/vendor/jetbrains-mono/JetBrainsMono-Medium.woff2") format("woff2"); font-weight:500; font-style:normal; font-display:swap; }
+  @font-face { font-family:"JetBrains Mono"; src:url("/vendor/jetbrains-mono/JetBrainsMono-SemiBold.woff2") format("woff2"); font-weight:600; font-style:normal; font-display:swap; }
+  :root { --bg:#1e1f22; --panel:#2b2d30; --border:#393b40; --fg:#dfe1e5; --mut:#8b8f97; --accent:#3574f0; --err:#db5c5c; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--fg);
+         font-family:"JetBrains Mono",ui-monospace,"Cascadia Code","SFMono-Regular",Consolas,monospace; font-size:12.5px; }
+  form { background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:0; width:340px; box-shadow:0 8px 32px rgba(0,0,0,.4); }
+  .titlebar { padding:11px 16px; border-bottom:1px solid var(--border); color:var(--fg); font-size:12px; font-weight:600; }
+  .body { padding:20px 20px 22px; }
+  .sub { color:var(--mut); font-size:11.5px; margin:0 0 16px; }
+  label { display:block; color:var(--mut); font-size:11px; margin-bottom:6px; text-transform:uppercase; letter-spacing:.05em; font-weight:600; }
+  input { width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:5px;
+          padding:8px 10px; font:12.5px "JetBrains Mono",ui-monospace,Consolas,monospace; margin-bottom:6px; }
+  input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(53,116,240,.14); }
+  .hint { color:var(--mut); font-size:11px; margin:0 0 16px; line-height:1.5; }
+  button { width:100%; background:var(--accent); border:1px solid var(--accent); color:#fff; font-weight:500; padding:8px;
+           border-radius:5px; cursor:pointer; font-family:inherit; font-size:12.5px; }
+  button:hover { background:#4682f5; }
+  .err { color:var(--err); font-size:12px; min-height:16px; margin:0 0 10px; }
+</style></head>
+<body>
+<form id="f">
+  <div class="titlebar">mockupstream</div>
+  <div class="body">
+    <p class="sub">控制台已启用密码保护</p>
+    <div class="err" id="err"></div>
+    <label for="pw">Password</label>
+    <input type="password" id="pw" placeholder="••••••••" autocomplete="off" autofocus />
+    <p class="hint">密码只经服务端 bcrypt 校验一次性传输，不写入 localStorage / Cookie 明文，浏览器也不会缓存这个值。</p>
+    <button type="submit">Log In</button>
+  </div>
+</form>
+<script>
+document.getElementById("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = document.getElementById("err");
+  err.textContent = "";
+  const r = await fetch("/__auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: document.getElementById("pw").value }) });
+  if (r.ok) { location.href = "/"; return; }
+  if (r.status === 429) { const d = await r.json(); err.textContent = "失败次数过多，" + Math.ceil(d.retryAfterMs / 60000) + " 分钟后再试"; return; }
+  err.textContent = "密码错误";
+  document.getElementById("pw").value = "";
+});
+</script>
+</body></html>`;
+}
 
 // 通用: 处理一次上游请求(某格式)
 async function handleUpstream(fmtName, fmt, req, url) {
@@ -81,18 +153,88 @@ function usageTag(fmtName, resp) {
 
 Bun.serve({
   port: PORT,
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
     const p = url.pathname;
+
+    // ---------- 身份验证网关：控制台页面 + 全部 /__* 管理接口 ----------
+    const authExempt = p === "/__auth/login" || p === "/__auth/status" || p.startsWith("/vendor/");
+    const authGated = !authExempt && (p === "/" || p === "/index.html" || p.startsWith("/__"));
+    if (authGated) {
+      const access = auth.checkAccess(req, server, store.getAuthConfig());
+      if (!access.allowed) {
+        if (p === "/" || p === "/index.html")
+          return new Response(loginPageHtml(), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+        return json({ error: "unauthorized" }, 401);
+      }
+    }
+
+    // ---------- 认证相关路由 ----------
+    if (p === "/__auth/status" && req.method === "GET") {
+      const cfg = store.getAuthConfig();
+      return json({
+        passwordSet: !!cfg.passwordHash,
+        trustedByIp: cfg.passwordHash ? auth.isTrustedIp(auth.getClientIp(req, server), cfg) : true,
+        authenticated: auth.hasValidSession(req),
+        lan: cfg.lan,
+        public: cfg.public,
+      });
+    }
+    if (p === "/__auth/login" && req.method === "POST") {
+      const ip = auth.getClientIp(req, server);
+      const remain = auth.isLocked(ip);
+      if (remain > 0) return json({ error: "locked", retryAfterMs: remain }, 429);
+      const { password } = await req.json().catch(() => ({}));
+      const cfg = store.getAuthConfig();
+      const ok = await auth.verifyPassword(password || "", cfg.passwordHash);
+      if (!ok) { auth.recordFailure(ip); return json({ error: "bad password" }, 401); }
+      auth.recordSuccess(ip);
+      const token = auth.createSession();
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Set-Cookie": auth.sessionCookieHeader(token) },
+      });
+    }
+    if (p === "/__auth/logout" && req.method === "POST") {
+      auth.destroySession(req);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Set-Cookie": auth.clearSessionCookieHeader() },
+      });
+    }
+    if (p === "/__auth/config" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const patch = {};
+      if (body.password) patch.passwordHash = await auth.hashPassword(body.password);
+      if (body.lan && typeof body.lan === "object") {
+        patch.lan = {};
+        if (auth.TRUST_MODES.includes(body.lan.mode)) patch.lan.mode = body.lan.mode;
+        if (typeof body.lan.list === "string") patch.lan.list = body.lan.list.trim() || null;
+      }
+      if (body.public && typeof body.public === "object") {
+        patch.public = {};
+        if (auth.TRUST_MODES.includes(body.public.mode)) patch.public.mode = body.public.mode;
+        if (typeof body.public.list === "string") patch.public.list = body.public.list.trim() || null;
+      }
+      const next = store.setAuthConfig(patch);
+      return json({ ok: true, passwordSet: !!next.passwordHash, lan: next.lan, public: next.public });
+    }
 
     // ---------- 控制台前端 ----------
     if (p === "/" || p === "/index.html")
       return new Response(Bun.file(import.meta.dir + "/panel.html"), { headers: { "Content-Type": "text/html; charset=utf-8" } });
-    if (p === "/vendor/alpine.min.js")
-      return new Response(Bun.file(import.meta.dir + "/vendor/alpine.min.js"), { headers: { "Content-Type": "text/javascript" } });
+    if (p.startsWith("/vendor/")) {
+      const rel = p.slice("/vendor/".length);
+      if (rel.includes("..")) return new Response("forbidden", { status: 403 });
+      const ext = rel.split(".").pop();
+      const type = { js: "text/javascript", woff2: "font/woff2", txt: "text/plain" }[ext] || "application/octet-stream";
+      const file = Bun.file(import.meta.dir + "/vendor/" + rel);
+      if (!(await file.exists())) return new Response("not found", { status: 404 });
+      return new Response(file, { headers: { "Content-Type": type } });
+    }
 
     // ---------- 管理 API ----------
-    if (p === "/__state") return json({ ...store.getState(), port: PORT });
+    if (p === "/__state") return json({ ...store.getState(), port: PORT, lanIps: lanIps() });
     if (p === "/__stats") return json({ recent });
     if (p === "/__models" && req.method === "POST") {
       const m = await req.json().catch(() => ({}));
@@ -145,3 +287,6 @@ console.log(`mock upstream listening on http://localhost:${PORT}`);
 console.log(`→ 控制台:      http://localhost:${PORT}/`);
 console.log(`→ 渠道 Base URL: http://localhost:${PORT}   (Docker: http://host.docker.internal:${PORT})`);
 console.log(`  OpenAI /v1/chat/completions · Claude /v1/messages · Gemini /v1beta/models/{m}:generateContent`);
+if (!store.getAuthConfig().passwordHash) {
+  console.log(`  提醒: 控制台尚未设置密码，谁都能访问和修改配置。要给局域网/公网同事用之前，去面板"网络与安全"设一个。`);
+}
