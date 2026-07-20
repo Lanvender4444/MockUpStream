@@ -15,6 +15,10 @@
   header h1 { font-size:16px; margin:0; font-weight:600; }
   header .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); box-shadow:0 0 8px var(--ok); }
   header .base { margin-left:auto; color:var(--mut); font-size:12px; font-family:ui-monospace,Consolas,monospace; }
+  header .authbadge { font-size:11px; padding:2px 9px; border-radius:20px; font-weight:600; }
+  header .authbadge.on { background:rgba(63,185,80,.15); color:var(--ok); }
+  header .authbadge.off { background:rgba(227,179,65,.15); color:var(--warn); }
+  header .logout { padding:4px 10px; font-size:12px; }
   .layout { display:grid; grid-template-columns:260px 1fr; gap:0; height:calc(100vh - 51px); }
   .side { border-right:1px solid var(--line); padding:14px; overflow:auto; }
   .main { padding:16px 20px; overflow:auto; }
@@ -46,7 +50,7 @@
   .btns { display:flex; gap:10px; margin-top:4px; }
   .hint { color:var(--mut); font-size:12px; margin-top:8px; }
   .ep { font-family:ui-monospace,Consolas,monospace; font-size:12px; background:#0e1016; border:1px solid var(--line);
-        border-radius:6px; padding:6px 9px; color:var(--acc); display:flex; align-items:center; gap:8px; }
+        border-radius:6px; padding:6px 9px; color:var(--acc); display:flex; align-items:center; gap:8px; margin-bottom:6px; }
   .ep code { flex:1; overflow:auto; white-space:nowrap; }
   table { width:100%; border-collapse:collapse; font-size:12px; font-family:ui-monospace,Consolas,monospace; }
   td, th { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); }
@@ -57,6 +61,11 @@
            opacity:0; transition:opacity .2s; font-weight:600; z-index:9; }
   .toast.show { opacity:1; }
   pre { background:#0e1016; border:1px solid var(--line); border-radius:7px; padding:10px; overflow:auto; max-height:220px; font-size:12px; margin:0; }
+  .tabs { display:flex; gap:6px; margin-bottom:16px; border-bottom:1px solid var(--line); padding-bottom:10px; }
+  .tabs button { background:transparent; border:1px solid transparent; color:var(--mut); }
+  .tabs button.active { background:var(--panel); border-color:var(--line); color:var(--fg); }
+  .warnbar { background:rgba(227,179,65,.12); border:1px solid rgba(227,179,65,.4); color:var(--warn);
+             border-radius:8px; padding:9px 12px; font-size:12.5px; margin-bottom:16px; }
 </style>
 </head>
 <body x-data="app()" x-init="init()">
@@ -64,6 +73,14 @@
   <span class="dot"></span>
   <h1>Mock 上游控制台</h1>
   <span class="base" x-text="'Base URL → ' + origin"></span>
+  <template x-if="auth.passwordSet">
+    <span class="authbadge" :class="auth.trustedByIp || auth.authenticated ? 'on' : 'off'"
+          x-text="auth.trustedByIp ? '信任 IP 免登录' : (auth.authenticated ? '已登录' : '未登录')"></span>
+  </template>
+  <template x-if="!auth.passwordSet">
+    <span class="authbadge off">未设置密码</span>
+  </template>
+  <button class="sm logout" x-show="auth.authenticated" @click="logout()">退出登录</button>
 </header>
 
 <div class="layout">
@@ -83,119 +100,184 @@
     </template>
   </div>
 
-  <!-- 右：编辑器 + 记录 -->
-  <div class="main" x-show="sel">
-    <div class="card">
-      <h2>预设（一键套用到当前模型）</h2>
-      <div class="presets">
-        <template x-for="p in presets" :key="p.name">
-          <button @click="applyPreset(p.name)" x-text="p.name"></button>
-        </template>
-      </div>
-      <div class="hint">点预设会填入下面的表单，仍需点「保存」写入生效。</div>
+  <!-- 右：Tab + 内容 -->
+  <div class="main">
+    <div class="warnbar" x-show="!auth.passwordSet">
+      尚未设置管理密码，任何能访问这个页面的人都可以修改所有配置。要给局域网/公网同事用之前，先去「网络与安全」设一个。
     </div>
 
-    <div class="card">
-      <h2>预设管理（自定义 / 编辑 / 删除）</h2>
-      <div class="presets" style="margin-bottom:10px; align-items:center">
-        <template x-for="p in presets" :key="p.name">
-          <span style="display:inline-flex; gap:4px; align-items:center; border:1px solid var(--line); border-radius:7px; padding:2px 2px 2px 4px">
-            <button class="sm" style="border:none; background:transparent" @click="editPreset(p)" x-text="p.name"></button>
-            <button class="sm danger" style="border:none; background:transparent; padding:2px 6px" @click="delPreset(p.name)">×</button>
-          </span>
-        </template>
-        <button class="sm primary" @click="newPreset()">+ 新建预设</button>
-      </div>
+    <div class="tabs">
+      <button :class="{active: tab==='models'}" @click="tab='models'">模型配置</button>
+      <button :class="{active: tab==='presets'}" @click="tab='presets'">预设管理</button>
+      <button :class="{active: tab==='recent'}" @click="tab='recent'">最近请求</button>
+      <button :class="{active: tab==='network'}" @click="tab='network'">网络与安全</button>
+    </div>
 
-      <template x-if="editingPreset">
-        <div style="border-top:1px solid var(--line); padding-top:12px">
-          <div class="row"><label>预设名</label><input x-model="presetForm.name" placeholder="预设名称" /></div>
+    <!-- ===== 模型配置 ===== -->
+    <template x-if="tab==='models'">
+      <div>
+        <div class="card">
+          <h2>预设（一键套用到当前模型）</h2>
+          <div class="presets">
+            <template x-for="p in presets" :key="p.name">
+              <button @click="applyPreset(p.name)" x-text="p.name"></button>
+            </template>
+          </div>
+          <div class="hint">点预设会填入下面的表单，仍需点「保存」写入生效。</div>
+        </div>
+
+        <div class="card" x-show="sel">
+          <h2>模型配置</h2>
+          <div class="row"><label>模型名 id</label><input x-model="sel.id" /></div>
+          <div class="row"><label>协议格式</label>
+            <select x-model="sel.format">
+              <option value="openai">openai（/v1/chat/completions）</option>
+              <option value="claude">claude（/v1/messages）</option>
+              <option value="gemini">gemini（:generateContent）</option>
+            </select>
+          </div>
+          <div class="row"><label>回复内容</label><textarea x-model="sel.content"></textarea></div>
+          <div class="hint" style="margin:-4px 0 10px">回复内容=实际返回的文本（原样，不截断）；「输出 token」只是**上报的计费数字**，与正文长度无关，互不影响。</div>
           <div class="row"><label>输入 token</label>
             <div class="grid2">
-              <select x-model="presetForm.promptMode"><option value="auto">auto</option><option value="fixed">fixed</option></select>
-              <input type="number" x-model.number="presetForm.promptTokens" />
+              <select x-model="sel.promptMode"><option value="auto">auto（按输入估算）</option><option value="fixed">fixed（固定）</option></select>
+              <input type="number" x-model.number="sel.promptTokens" />
             </div>
           </div>
-          <div class="row"><label>输出 token</label><input type="number" x-model.number="presetForm.completionTokens" /></div>
+          <div class="row"><label>输出 token</label><input type="number" x-model.number="sel.completionTokens" /></div>
           <div class="row"><label>缓存命中</label>
             <div class="grid2">
-              <select x-model="presetForm.cacheMode"><option value="none">none</option><option value="ratio">ratio</option><option value="fixed">fixed</option></select>
-              <input type="number" step="0.05" x-model.number="presetForm.cacheRatio" x-show="presetForm.cacheMode==='ratio'" />
-              <input type="number" x-model.number="presetForm.cachedTokens" x-show="presetForm.cacheMode==='fixed'" />
+              <select x-model="sel.cacheMode"><option value="none">none</option><option value="ratio">ratio（比例）</option><option value="fixed">fixed（固定）</option></select>
+              <input type="number" step="0.05" x-model.number="sel.cacheRatio" x-show="sel.cacheMode==='ratio'" />
+              <input type="number" x-model.number="sel.cachedTokens" x-show="sel.cacheMode==='fixed'" />
             </div>
           </div>
-          <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="presetForm.cacheCreationTokens" /></div>
-          <div class="row"><label>响应延迟 ms</label><input type="number" x-model.number="presetForm.latencyMs" /></div>
-          <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="presetForm.chunkDelayMs" /></div>
+          <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="sel.cacheCreationTokens" /></div>
+          <div class="row"><label>响应延迟 ms</label><input type="number" x-model.number="sel.latencyMs" /></div>
+          <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="sel.chunkDelayMs" /></div>
           <div class="row"><label>注入错误码</label>
             <div class="grid2">
-              <select x-model.number="presetForm.errorStatus"><option :value="0">不注入</option><option :value="400">400</option><option :value="401">401</option><option :value="403">403</option><option :value="429">429</option><option :value="500">500</option><option :value="503">503</option></select>
-              <input type="number" min="0" max="100" x-model.number="presetForm.errorRate" />
+              <select x-model.number="sel.errorStatus"><option :value="0">不注入</option><option :value="400">400</option><option :value="401">401</option><option :value="403">403</option><option :value="429">429</option><option :value="500">500</option><option :value="503">503</option></select>
+              <input type="number" min="0" max="100" x-model.number="sel.errorRate" title="触发概率 %" />
             </div>
           </div>
-          <div class="row"><label>错误信息</label><input x-model="presetForm.errorMessage" /></div>
-          <div class="btns"><button class="primary" @click="savePresetForm()">保存预设</button><button @click="editingPreset=''">取消</button></div>
-          <div class="hint">预设是完整行为快照（不含模型名/格式/回复内容），套用即得确定结果——只改你要的字段即可。</div>
+          <div class="row"><label>错误信息</label><input x-model="sel.errorMessage" /></div>
+          <div class="btns"><button class="primary" @click="saveModel()">保存</button></div>
+          <div class="hint" style="margin-top:12px">该渠道 Base URL（复制到 new-api 渠道）：</div>
+          <div class="ep"><code x-text="origin"></code><button class="sm" @click="copy(origin)">复制</button></div>
+          <div class="ep"><code x-text="endpointHint()"></code></div>
+          <div class="hint">Docker 下把 <code>localhost</code> 换成 <code>host.docker.internal</code>。</div>
         </div>
-      </template>
-    </div>
+      </div>
+    </template>
 
-    <div class="card" x-show="sel">
-      <h2>模型配置</h2>
-      <div class="row"><label>模型名 id</label><input x-model="sel.id" /></div>
-      <div class="row"><label>协议格式</label>
-        <select x-model="sel.format">
-          <option value="openai">openai（/v1/chat/completions）</option>
-          <option value="claude">claude（/v1/messages）</option>
-          <option value="gemini">gemini（:generateContent）</option>
-        </select>
-      </div>
-      <div class="row"><label>回复内容</label><textarea x-model="sel.content"></textarea></div>
-      <div class="hint" style="margin:-4px 0 10px">回复内容=实际返回的文本（原样，不截断）；「输出 token」只是**上报的计费数字**，与正文长度无关，互不影响。</div>
-      <div class="row"><label>输入 token</label>
-        <div class="grid2">
-          <select x-model="sel.promptMode"><option value="auto">auto（按输入估算）</option><option value="fixed">fixed（固定）</option></select>
-          <input type="number" x-model.number="sel.promptTokens" />
-        </div>
-      </div>
-      <div class="row"><label>输出 token</label><input type="number" x-model.number="sel.completionTokens" /></div>
-      <div class="row"><label>缓存命中</label>
-        <div class="grid2">
-          <select x-model="sel.cacheMode"><option value="none">none</option><option value="ratio">ratio（比例）</option><option value="fixed">fixed（固定）</option></select>
-          <input type="number" step="0.05" x-model.number="sel.cacheRatio" x-show="sel.cacheMode==='ratio'" />
-          <input type="number" x-model.number="sel.cachedTokens" x-show="sel.cacheMode==='fixed'" />
-        </div>
-      </div>
-      <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="sel.cacheCreationTokens" /></div>
-      <div class="row"><label>响应延迟 ms</label><input type="number" x-model.number="sel.latencyMs" /></div>
-      <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="sel.chunkDelayMs" /></div>
-      <div class="row"><label>注入错误码</label>
-        <div class="grid2">
-          <select x-model.number="sel.errorStatus"><option :value="0">不注入</option><option :value="400">400</option><option :value="401">401</option><option :value="403">403</option><option :value="429">429</option><option :value="500">500</option><option :value="503">503</option></select>
-          <input type="number" min="0" max="100" x-model.number="sel.errorRate" title="触发概率 %" />
-        </div>
-      </div>
-      <div class="row"><label>错误信息</label><input x-model="sel.errorMessage" /></div>
-      <div class="btns"><button class="primary" @click="saveModel()">保存</button></div>
-      <div class="hint" style="margin-top:12px">该渠道 Base URL（复制到 new-api 渠道）：</div>
-      <div class="ep"><code x-text="origin"></code><button class="sm" @click="copy(origin)">复制</button></div>
-      <div class="ep" style="margin-top:6px"><code x-text="endpointHint()"></code></div>
-      <div class="hint">Docker 下把 <code>localhost</code> 换成 <code>host.docker.internal</code>。</div>
-    </div>
-
-    <div class="card">
-      <h2>最近请求</h2>
-      <table><thead><tr><th>时间</th><th>模型</th><th>格式</th><th>流</th><th>结果</th></tr></thead>
-        <tbody>
-          <template x-for="(x,i) in recent" :key="i">
-            <tr><td x-text="x.t"></td><td x-text="x.model"></td><td><span class="badge" :class="x.format" x-text="x.format"></span></td>
-                <td x-text="x.stream?'✓':'—'"></td>
-                <td><span class="pill" :class="String(x.result).startsWith('ERR')?'err':'ok'" x-text="x.result"></span></td></tr>
+    <!-- ===== 预设管理 ===== -->
+    <template x-if="tab==='presets'">
+      <div class="card">
+        <h2>预设管理（自定义 / 编辑 / 删除）</h2>
+        <div class="presets" style="margin-bottom:10px; align-items:center">
+          <template x-for="p in presets" :key="p.name">
+            <span style="display:inline-flex; gap:4px; align-items:center; border:1px solid var(--line); border-radius:7px; padding:2px 2px 2px 4px">
+              <button class="sm" style="border:none; background:transparent" @click="editPreset(p)" x-text="p.name"></button>
+              <button class="sm danger" style="border:none; background:transparent; padding:2px 6px" @click="delPreset(p.name)">×</button>
+            </span>
           </template>
-          <tr x-show="!recent.length"><td colspan="5" style="color:var(--mut)">暂无</td></tr>
-        </tbody>
-      </table>
-    </div>
+          <button class="sm primary" @click="newPreset()">+ 新建预设</button>
+        </div>
+
+        <template x-if="editingPreset">
+          <div style="border-top:1px solid var(--line); padding-top:12px">
+            <div class="row"><label>预设名</label><input x-model="presetForm.name" placeholder="预设名称" /></div>
+            <div class="row"><label>输入 token</label>
+              <div class="grid2">
+                <select x-model="presetForm.promptMode"><option value="auto">auto</option><option value="fixed">fixed</option></select>
+                <input type="number" x-model.number="presetForm.promptTokens" />
+              </div>
+            </div>
+            <div class="row"><label>输出 token</label><input type="number" x-model.number="presetForm.completionTokens" /></div>
+            <div class="row"><label>缓存命中</label>
+              <div class="grid2">
+                <select x-model="presetForm.cacheMode"><option value="none">none</option><option value="ratio">ratio</option><option value="fixed">fixed</option></select>
+                <input type="number" step="0.05" x-model.number="presetForm.cacheRatio" x-show="presetForm.cacheMode==='ratio'" />
+                <input type="number" x-model.number="presetForm.cachedTokens" x-show="presetForm.cacheMode==='fixed'" />
+              </div>
+            </div>
+            <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="presetForm.cacheCreationTokens" /></div>
+            <div class="row"><label>响应延迟 ms</label><input type="number" x-model.number="presetForm.latencyMs" /></div>
+            <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="presetForm.chunkDelayMs" /></div>
+            <div class="row"><label>注入错误码</label>
+              <div class="grid2">
+                <select x-model.number="presetForm.errorStatus"><option :value="0">不注入</option><option :value="400">400</option><option :value="401">401</option><option :value="403">403</option><option :value="429">429</option><option :value="500">500</option><option :value="503">503</option></select>
+                <input type="number" min="0" max="100" x-model.number="presetForm.errorRate" />
+              </div>
+            </div>
+            <div class="row"><label>错误信息</label><input x-model="presetForm.errorMessage" /></div>
+            <div class="btns"><button class="primary" @click="savePresetForm()">保存预设</button><button @click="editingPreset=''">取消</button></div>
+            <div class="hint">预设是完整行为快照（不含模型名/格式/回复内容），套用即得确定结果——只改你要的字段即可。</div>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <!-- ===== 最近请求 ===== -->
+    <template x-if="tab==='recent'">
+      <div class="card">
+        <h2>最近请求</h2>
+        <table><thead><tr><th>时间</th><th>模型</th><th>格式</th><th>流</th><th>结果</th></tr></thead>
+          <tbody>
+            <template x-for="(x,i) in recent" :key="i">
+              <tr><td x-text="x.t"></td><td x-text="x.model"></td><td><span class="badge" :class="x.format" x-text="x.format"></span></td>
+                  <td x-text="x.stream?'✓':'—'"></td>
+                  <td><span class="pill" :class="String(x.result).startsWith('ERR')?'err':'ok'" x-text="x.result"></span></td></tr>
+            </template>
+            <tr x-show="!recent.length"><td colspan="5" style="color:var(--mut)">暂无</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
+
+    <!-- ===== 网络与安全 ===== -->
+    <template x-if="tab==='network'">
+      <div>
+        <div class="card">
+          <h2>当前访问地址</h2>
+          <div class="ep"><code x-text="'http://localhost:' + port"></code><button class="sm" @click="copy('http://localhost:' + port)">复制</button></div>
+          <template x-for="ip in lanIps" :key="ip">
+            <div class="ep"><code x-text="'http://' + ip + ':' + port"></code><button class="sm" @click="copy('http://' + ip + ':' + port)">复制</button></div>
+          </template>
+          <div class="hint" x-show="!lanIps.length">没探测到局域网网卡地址（可能只有回环网卡）。</div>
+          <div class="hint">同事在同一局域网/VPN 内，用上面带局域网 IP 的地址直接访问即可。</div>
+        </div>
+
+        <div class="card">
+          <h2>暴露公网</h2>
+          <div class="hint">
+            把端口转发/反向代理到本机 <span x-text="port"></span> 端口即可从公网访问。建议：<br />
+            1. 一定先在下面设置管理密码，再暴露端口。<br />
+            2. 有条件的话在前面套一层反向代理（Nginx / Caddy）做 HTTPS，登录请求走明文公网不安全。<br />
+            3. 反向代理场景下如果同事反馈"局域网网段没被识别为信任 IP"，通常是反代把源 IP 换成了自己的地址——这种情况请把反代自身出口 IP 或反代所在网段也写进下面的信任正则。
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>管理密码</h2>
+          <div class="hint" x-show="!auth.passwordSet">当前未设置，控制台完全开放。</div>
+          <div class="hint" x-show="auth.passwordSet">已设置。留空「新密码」保存则不修改密码。</div>
+          <div class="row"><label>新密码</label><input type="password" x-model="authForm.password" placeholder="留空=不修改" /></div>
+          <div class="btns"><button class="primary" @click="savePassword()">保存密码</button></div>
+        </div>
+
+        <div class="card">
+          <h2>信任 IP 正则</h2>
+          <div class="hint">
+            命中正则的来源 IP 直接免登录访问控制台。留空 = 使用默认值（信任局域网/回环网段：127.*、10.*、172.16-31.*、192.168.*）。
+            自定义正则会<b>完全替换</b>默认值，不是叠加——公网场景下如果还想让局域网同事免登录，要把局域网网段也写进正则里。
+          </div>
+          <div class="row"><label>正则</label><input x-model="authForm.trustedIpsRegex" placeholder="例如 ^(192\.168\.|203\.0\.113\.)" /></div>
+          <div class="btns"><button class="primary" @click="saveTrustedIps()">保存正则</button></div>
+        </div>
+      </div>
+    </template>
   </div>
 </div>
 
@@ -205,19 +287,27 @@
 function app() {
   return {
     origin: location.origin,
+    tab: "models",
     models: [], presets: [], recent: [], sel: null, toastMsg: "",
     editingPreset: "", presetForm: {},
+    port: "", lanIps: [],
+    auth: { passwordSet: false, authenticated: false, trustedByIp: true, trustedIpsRegex: "" },
+    authForm: { password: "", trustedIpsRegex: "" },
     async init() {
       await this.loadState();
+      await this.loadAuthStatus();
       if (this.models.length) this.select(this.models[0].id);
       this.pollStats();
       setInterval(() => this.pollStats(), 4000);
     },
     async loadState() {
       const r = await fetch("/__state"); const s = await r.json();
-      this.models = s.models; this.presets = s.presets;
-      // 保持当前选中
+      this.models = s.models; this.presets = s.presets; this.port = s.port; this.lanIps = s.lanIps || [];
       if (this.sel) { const still = this.models.find(m => m.id === this.sel.id); this.sel = still ? JSON.parse(JSON.stringify(still)) : (this.models[0] ? JSON.parse(JSON.stringify(this.models[0])) : null); }
+    },
+    async loadAuthStatus() {
+      const r = await fetch("/__auth/status"); const s = await r.json();
+      this.auth = s; this.authForm.trustedIpsRegex = s.trustedIpsRegex || "";
     },
     select(id) { const m = this.models.find(x => x.id === id); this.sel = m ? JSON.parse(JSON.stringify(m)) : null; },
     toast(msg, ok=true) { this.toastMsg = msg; setTimeout(() => this.toastMsg = "", 1600); },
@@ -246,14 +336,12 @@ function app() {
     },
     async applyPreset(name) {
       if (!this.sel) return;
-      // 先确保模型已存, 再套预设(服务端合并 patch 并落盘)
       await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(this.sel) });
       const r = await fetch("/__models/" + encodeURIComponent(this.sel.id) + "/apply-preset", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name }) });
       if (r.ok) { const {model} = await r.json(); await this.loadState(); this.select(model.id); this.toast("已套用预设「" + name + "」"); }
       else this.toast("套用失败", false);
     },
     async pollStats() { const r = await fetch("/__stats"); this.recent = (await r.json()).recent; },
-    // ---- 预设管理（表单，字段预填，只改想改的）----
     presetDefaults() {
       return { promptMode:"auto", promptTokens:100, completionTokens:30, cacheMode:"none", cacheRatio:0.5,
         cachedTokens:0, cacheCreationTokens:0, latencyMs:0, chunkDelayMs:40, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
@@ -279,6 +367,21 @@ function app() {
       return "POST " + this.origin + "/v1beta/models/" + this.sel.id + ":generateContent";
     },
     copy(t) { navigator.clipboard?.writeText(t); this.toast("已复制"); },
+    async savePassword() {
+      if (!this.authForm.password) { this.toast("请输入新密码", false); return; }
+      const r = await fetch("/__auth/config", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ password: this.authForm.password }) });
+      if (r.ok) { this.authForm.password = ""; await this.loadAuthStatus(); this.toast("密码已保存"); }
+      else this.toast("保存失败", false);
+    },
+    async saveTrustedIps() {
+      const r = await fetch("/__auth/config", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ trustedIpsRegex: this.authForm.trustedIpsRegex }) });
+      if (r.ok) { await this.loadAuthStatus(); this.toast("信任 IP 正则已保存"); }
+      else this.toast("保存失败", false);
+    },
+    async logout() {
+      await fetch("/__auth/logout", { method:"POST" });
+      location.href = "/";
+    },
   };
 }
 </script>
