@@ -9,8 +9,7 @@
 //   Docker 下把 localhost 换成 host.docker.internal 或 compose 服务名。
 //
 // 局域网/公网访问 + 控制台身份验证：
-//   面板"网络与安全"区块可设置管理密码 + 信任 IP 正则，落库 mock.db，改完立即生效。
-//   也可用环境变量在启动时写入/覆盖： MOCK_ADMIN_PASSWORD / MOCK_TRUSTED_IPS
+//   面板"网络与安全"区块可设置管理密码 + 信任 IP 正则，落库 mock.db（重启不丢，跟模型/预设一样）。
 //   未设置密码时，控制台和 /v1/* 一样保持完全开放（不影响现有本地用法）。
 
 import { networkInterfaces } from "os";
@@ -30,14 +29,6 @@ const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "X-Mock-Upstream": "1" } });
 
 await store.load();
-
-// 环境变量引导：设置了就每次启动覆盖 DB 中的密码/信任正则；不设置则以 DB(面板改的)为准。
-if (process.env.MOCK_ADMIN_PASSWORD) {
-  store.setAuthConfig({ passwordHash: await auth.hashPassword(process.env.MOCK_ADMIN_PASSWORD) });
-}
-if (process.env.MOCK_TRUSTED_IPS) {
-  store.setAuthConfig({ trustedIpsRegex: process.env.MOCK_TRUSTED_IPS });
-}
 
 function lanIps() {
   const nets = networkInterfaces();
