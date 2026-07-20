@@ -79,6 +79,12 @@ function initSchema() {
   db.run(`CREATE TABLE IF NOT EXISTS presets (name TEXT PRIMARY KEY, patch TEXT, ord INTEGER)`);
 }
 
+function initAuthSchema() {
+  db.run(`CREATE TABLE IF NOT EXISTS auth (id INTEGER PRIMARY KEY CHECK (id = 1), passwordHash TEXT, trustedIpsRegex TEXT, updatedAt TEXT)`);
+  const row = db.query("SELECT id FROM auth WHERE id = 1").get();
+  if (!row) db.run("INSERT INTO auth (id, passwordHash, trustedIpsRegex, updatedAt) VALUES (1, NULL, NULL, NULL)");
+}
+
 function seedIfEmpty() {
   const nModels = db.query("SELECT COUNT(*) c FROM models").get().c;
   if (nModels === 0) DEFAULT_MODELS.forEach((m, i) => writeModel(m, i));
@@ -115,12 +121,13 @@ function rowToModel(row) {
 
 // ---------- 对外 API（与旧版一致）----------
 
-export async function load() {
-  db = new Database(DB_PATH);
+export async function load(dbPath) {
+  db = new Database(dbPath || DB_PATH);
   // 配置库写操作极少, 不用 WAL(避免强杀丢未 checkpoint 的提交);
   // 默认回滚日志 + synchronous FULL => 每次提交即时落盘, 抗强杀。
   db.run("PRAGMA synchronous = FULL");
   initSchema();
+  initAuthSchema();
   seedIfEmpty();
   return getState();
 }
@@ -181,4 +188,20 @@ export async function reset() {
   db.run("DELETE FROM presets");
   seedIfEmpty();
   return getState();
+}
+
+export function getAuthConfig() {
+  const row = db.query("SELECT passwordHash, trustedIpsRegex, updatedAt FROM auth WHERE id = 1").get();
+  return row || { passwordHash: null, trustedIpsRegex: null, updatedAt: null };
+}
+
+export function setAuthConfig(patch) {
+  const cur = getAuthConfig();
+  const next = {
+    passwordHash: patch.passwordHash !== undefined ? patch.passwordHash : cur.passwordHash,
+    trustedIpsRegex: patch.trustedIpsRegex !== undefined ? patch.trustedIpsRegex : cur.trustedIpsRegex,
+    updatedAt: new Date().toISOString(),
+  };
+  db.run("UPDATE auth SET passwordHash = ?, trustedIpsRegex = ?, updatedAt = ? WHERE id = 1", [next.passwordHash, next.trustedIpsRegex, next.updatedAt]);
+  return next;
 }
