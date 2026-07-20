@@ -1,6 +1,7 @@
 // auth.test.js —— bun test: 局域网/公网访问身份验证（store 持久化 + auth.js 逻辑）。
 import { test, expect, beforeEach } from "bun:test";
 import * as store from "./store.js";
+import * as auth from "./auth.js";
 
 beforeEach(async () => {
   await store.load(":memory:");
@@ -25,4 +26,41 @@ test("setAuthConfig: 写入信任正则后能读回, 不影响已设置的密码
   const cfg = store.getAuthConfig();
   expect(cfg.passwordHash).toBe("fake-hash-value");
   expect(cfg.trustedIpsRegex).toBe("^192\\.168\\.");
+});
+
+test("isTrustedIp: 默认私网正则命中局域网/回环地址", () => {
+  const cfg = { trustedIpsRegex: null };
+  expect(auth.isTrustedIp("127.0.0.1", cfg)).toBe(true);
+  expect(auth.isTrustedIp("192.168.1.20", cfg)).toBe(true);
+  expect(auth.isTrustedIp("10.0.0.5", cfg)).toBe(true);
+  expect(auth.isTrustedIp("172.20.0.9", cfg)).toBe(true);
+});
+
+test("isTrustedIp: 默认私网正则不命中公网地址", () => {
+  const cfg = { trustedIpsRegex: null };
+  expect(auth.isTrustedIp("8.8.8.8", cfg)).toBe(false);
+  expect(auth.isTrustedIp("203.0.113.9", cfg)).toBe(false);
+});
+
+test("isTrustedIp: 自定义正则替换默认值(不叠加)", () => {
+  const cfg = { trustedIpsRegex: "^203\\.0\\.113\\." };
+  expect(auth.isTrustedIp("203.0.113.9", cfg)).toBe(true);
+  expect(auth.isTrustedIp("192.168.1.20", cfg)).toBe(false);
+});
+
+test("getClientIp: 用 server.requestIP 返回地址, 没有 server 时返回 unknown", () => {
+  const req = new Request("http://x/");
+  const server = { requestIP: () => ({ address: "192.168.1.5" }) };
+  expect(auth.getClientIp(req, server)).toBe("192.168.1.5");
+  expect(auth.getClientIp(req, null)).toBe("unknown");
+});
+
+test("hashPassword / verifyPassword: 正确密码校验通过, 错误密码不通过", async () => {
+  const hash = await auth.hashPassword("correct-horse");
+  expect(await auth.verifyPassword("correct-horse", hash)).toBe(true);
+  expect(await auth.verifyPassword("wrong", hash)).toBe(false);
+});
+
+test("verifyPassword: hash 为 null 时始终返回 false", async () => {
+  expect(await auth.verifyPassword("anything", null)).toBe(false);
 });
