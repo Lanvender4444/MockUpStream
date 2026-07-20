@@ -268,13 +268,22 @@
         </div>
 
         <div class="card">
-          <h2>信任 IP 正则</h2>
+          <h2>局域网信任</h2>
           <div class="hint">
-            命中正则的来源 IP 直接免登录访问控制台。留空 = 使用默认值（信任局域网/回环网段：127.*、10.*、172.16-31.*、192.168.*）。
-            自定义正则会<b>完全替换</b>默认值，不是叠加——公网场景下如果还想让局域网同事免登录，要把局域网网段也写进正则里。
+            命中这个正则的来源 IP 直接免登录访问控制台。留空 = 默认信任局域网/回环网段（127.*、10.*、172.16-31.*、192.168.*）。
+            填了自定义正则会调整"局域网"的定义（比如收窄到某几个网段），跟下面的「公网信任白名单」是<b>并集</b>关系——两边任意一个命中都放行，互不影响。
           </div>
-          <div class="row"><label>正则</label><input x-model="authForm.trustedIpsRegex" placeholder="例如 ^(192\.168\.|203\.0\.113\.)" /></div>
-          <div class="btns"><button class="primary" @click="saveTrustedIps()">保存正则</button></div>
+          <div class="row"><label>正则</label><input x-model="authForm.lanTrustRegex" placeholder="留空用默认值，或填 ^(192\.168\.1\.)" /></div>
+          <div class="btns"><button class="primary" @click="saveLanTrust()">保存局域网信任正则</button></div>
+        </div>
+
+        <div class="card">
+          <h2>公网信任白名单</h2>
+          <div class="hint">
+            默认<b>空白名单</b>（不额外信任任何公网来源）——公网访客一律走密码登录。只有你明确加进来的公网 IP/网段才会免登录，跟局域网信任互不覆盖。
+          </div>
+          <div class="row"><label>正则</label><input x-model="authForm.publicTrustRegex" placeholder="例如 ^203\.0\.113\.9$" /></div>
+          <div class="btns"><button class="primary" @click="savePublicTrust()">保存公网白名单</button></div>
         </div>
       </div>
     </template>
@@ -291,8 +300,8 @@ function app() {
     models: [], presets: [], recent: [], sel: null, toastMsg: "",
     editingPreset: "", presetForm: {},
     port: "", lanIps: [],
-    auth: { passwordSet: false, authenticated: false, trustedByIp: true, trustedIpsRegex: "" },
-    authForm: { password: "", trustedIpsRegex: "" },
+    auth: { passwordSet: false, authenticated: false, trustedByIp: true, lanTrustRegex: "", publicTrustRegex: "" },
+    authForm: { password: "", lanTrustRegex: "", publicTrustRegex: "" },
     async init() {
       await this.loadState();
       await this.loadAuthStatus();
@@ -307,7 +316,7 @@ function app() {
     },
     async loadAuthStatus() {
       const r = await fetch("/__auth/status"); const s = await r.json();
-      this.auth = s; this.authForm.trustedIpsRegex = s.trustedIpsRegex || "";
+      this.auth = s; this.authForm.lanTrustRegex = s.lanTrustRegex || ""; this.authForm.publicTrustRegex = s.publicTrustRegex || "";
     },
     select(id) { const m = this.models.find(x => x.id === id); this.sel = m ? JSON.parse(JSON.stringify(m)) : null; },
     toast(msg, ok=true) { this.toastMsg = msg; setTimeout(() => this.toastMsg = "", 1600); },
@@ -373,9 +382,14 @@ function app() {
       if (r.ok) { this.authForm.password = ""; await this.loadAuthStatus(); this.toast("密码已保存"); }
       else this.toast("保存失败", false);
     },
-    async saveTrustedIps() {
-      const r = await fetch("/__auth/config", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ trustedIpsRegex: this.authForm.trustedIpsRegex }) });
-      if (r.ok) { await this.loadAuthStatus(); this.toast("信任 IP 正则已保存"); }
+    async saveLanTrust() {
+      const r = await fetch("/__auth/config", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ lanTrustRegex: this.authForm.lanTrustRegex }) });
+      if (r.ok) { await this.loadAuthStatus(); this.toast("局域网信任正则已保存"); }
+      else this.toast("保存失败", false);
+    },
+    async savePublicTrust() {
+      const r = await fetch("/__auth/config", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ publicTrustRegex: this.authForm.publicTrustRegex }) });
+      if (r.ok) { await this.loadAuthStatus(); this.toast("公网白名单已保存"); }
       else this.toast("保存失败", false);
     },
     async logout() {

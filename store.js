@@ -80,9 +80,12 @@ function initSchema() {
 }
 
 function initAuthSchema() {
-  db.run(`CREATE TABLE IF NOT EXISTS auth (id INTEGER PRIMARY KEY CHECK (id = 1), passwordHash TEXT, trustedIpsRegex TEXT, updatedAt TEXT)`);
+  db.run(`CREATE TABLE IF NOT EXISTS auth (id INTEGER PRIMARY KEY CHECK (id = 1), passwordHash TEXT, lanTrustRegex TEXT, publicTrustRegex TEXT, updatedAt TEXT)`);
+  // 兼容旧版单字段 schema(trustedIpsRegex): 表已存在但缺新列时补列, 已存在则忽略报错
+  try { db.run("ALTER TABLE auth ADD COLUMN lanTrustRegex TEXT"); } catch {}
+  try { db.run("ALTER TABLE auth ADD COLUMN publicTrustRegex TEXT"); } catch {}
   const row = db.query("SELECT id FROM auth WHERE id = 1").get();
-  if (!row) db.run("INSERT INTO auth (id, passwordHash, trustedIpsRegex, updatedAt) VALUES (1, NULL, NULL, NULL)");
+  if (!row) db.run("INSERT INTO auth (id, passwordHash, lanTrustRegex, publicTrustRegex, updatedAt) VALUES (1, NULL, NULL, NULL, NULL)");
 }
 
 function seedIfEmpty() {
@@ -191,17 +194,18 @@ export async function reset() {
 }
 
 export function getAuthConfig() {
-  const row = db.query("SELECT passwordHash, trustedIpsRegex, updatedAt FROM auth WHERE id = 1").get();
-  return row || { passwordHash: null, trustedIpsRegex: null, updatedAt: null };
+  const row = db.query("SELECT passwordHash, lanTrustRegex, publicTrustRegex, updatedAt FROM auth WHERE id = 1").get();
+  return row || { passwordHash: null, lanTrustRegex: null, publicTrustRegex: null, updatedAt: null };
 }
 
 export function setAuthConfig(patch) {
   const cur = getAuthConfig();
   const next = {
     passwordHash: patch.passwordHash !== undefined ? patch.passwordHash : cur.passwordHash,
-    trustedIpsRegex: patch.trustedIpsRegex !== undefined ? patch.trustedIpsRegex : cur.trustedIpsRegex,
+    lanTrustRegex: patch.lanTrustRegex !== undefined ? patch.lanTrustRegex : cur.lanTrustRegex,
+    publicTrustRegex: patch.publicTrustRegex !== undefined ? patch.publicTrustRegex : cur.publicTrustRegex,
     updatedAt: new Date().toISOString(),
   };
-  db.run("UPDATE auth SET passwordHash = ?, trustedIpsRegex = ?, updatedAt = ? WHERE id = 1", [next.passwordHash, next.trustedIpsRegex, next.updatedAt]);
+  db.run("UPDATE auth SET passwordHash = ?, lanTrustRegex = ?, publicTrustRegex = ?, updatedAt = ? WHERE id = 1", [next.passwordHash, next.lanTrustRegex, next.publicTrustRegex, next.updatedAt]);
   return next;
 }

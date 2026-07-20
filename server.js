@@ -157,7 +157,8 @@ Bun.serve({
         passwordSet: !!cfg.passwordHash,
         trustedByIp: cfg.passwordHash ? auth.isTrustedIp(auth.getClientIp(req, server), cfg) : true,
         authenticated: auth.hasValidSession(req),
-        trustedIpsRegex: cfg.trustedIpsRegex,
+        lanTrustRegex: cfg.lanTrustRegex,
+        publicTrustRegex: cfg.publicTrustRegex,
       });
     }
     if (p === "/__auth/login" && req.method === "POST") {
@@ -183,12 +184,13 @@ Bun.serve({
       });
     }
     if (p === "/__auth/config" && req.method === "POST") {
-      const { password, trustedIpsRegex } = await req.json().catch(() => ({}));
+      const { password, lanTrustRegex, publicTrustRegex } = await req.json().catch(() => ({}));
       const patch = {};
-      if (typeof trustedIpsRegex === "string") patch.trustedIpsRegex = trustedIpsRegex.trim() || null;
+      if (typeof lanTrustRegex === "string") patch.lanTrustRegex = lanTrustRegex.trim() || null;
+      if (typeof publicTrustRegex === "string") patch.publicTrustRegex = publicTrustRegex.trim() || null;
       if (password) patch.passwordHash = await auth.hashPassword(password);
       const next = store.setAuthConfig(patch);
-      return json({ ok: true, passwordSet: !!next.passwordHash, trustedIpsRegex: next.trustedIpsRegex });
+      return json({ ok: true, passwordSet: !!next.passwordHash, lanTrustRegex: next.lanTrustRegex, publicTrustRegex: next.publicTrustRegex });
     }
 
     // ---------- 控制台前端 ----------

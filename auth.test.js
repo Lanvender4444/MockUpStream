@@ -10,42 +10,54 @@ beforeEach(async () => {
 test("getAuthConfig: 初始状态密码和信任正则都是 null", () => {
   const cfg = store.getAuthConfig();
   expect(cfg.passwordHash).toBeNull();
-  expect(cfg.trustedIpsRegex).toBeNull();
+  expect(cfg.lanTrustRegex).toBeNull();
+  expect(cfg.publicTrustRegex).toBeNull();
 });
 
 test("setAuthConfig: 写入密码 hash 后能读回", () => {
   store.setAuthConfig({ passwordHash: "fake-hash-value" });
   const cfg = store.getAuthConfig();
   expect(cfg.passwordHash).toBe("fake-hash-value");
-  expect(cfg.trustedIpsRegex).toBeNull();
+  expect(cfg.lanTrustRegex).toBeNull();
+  expect(cfg.publicTrustRegex).toBeNull();
 });
 
-test("setAuthConfig: 写入信任正则后能读回, 不影响已设置的密码", () => {
+test("setAuthConfig: 局域网/公网信任正则各自独立写入, 互不覆盖, 也不影响密码", () => {
   store.setAuthConfig({ passwordHash: "fake-hash-value" });
-  store.setAuthConfig({ trustedIpsRegex: "^192\\.168\\." });
+  store.setAuthConfig({ lanTrustRegex: "^192\\.168\\." });
+  store.setAuthConfig({ publicTrustRegex: "^203\\.0\\.113\\." });
   const cfg = store.getAuthConfig();
   expect(cfg.passwordHash).toBe("fake-hash-value");
-  expect(cfg.trustedIpsRegex).toBe("^192\\.168\\.");
+  expect(cfg.lanTrustRegex).toBe("^192\\.168\\.");
+  expect(cfg.publicTrustRegex).toBe("^203\\.0\\.113\\.");
 });
 
-test("isTrustedIp: 默认私网正则命中局域网/回环地址", () => {
-  const cfg = { trustedIpsRegex: null };
+test("isTrustedIp: 默认局域网信任私网/回环地址(未配置 lanTrustRegex)", () => {
+  const cfg = { lanTrustRegex: null, publicTrustRegex: null };
   expect(auth.isTrustedIp("127.0.0.1", cfg)).toBe(true);
   expect(auth.isTrustedIp("192.168.1.20", cfg)).toBe(true);
   expect(auth.isTrustedIp("10.0.0.5", cfg)).toBe(true);
   expect(auth.isTrustedIp("172.20.0.9", cfg)).toBe(true);
 });
 
-test("isTrustedIp: 默认私网正则不命中公网地址", () => {
-  const cfg = { trustedIpsRegex: null };
+test("isTrustedIp: 公网地址默认不信任(空白名单)", () => {
+  const cfg = { lanTrustRegex: null, publicTrustRegex: null };
   expect(auth.isTrustedIp("8.8.8.8", cfg)).toBe(false);
   expect(auth.isTrustedIp("203.0.113.9", cfg)).toBe(false);
 });
 
-test("isTrustedIp: 自定义正则替换默认值(不叠加)", () => {
-  const cfg = { trustedIpsRegex: "^203\\.0\\.113\\." };
-  expect(auth.isTrustedIp("203.0.113.9", cfg)).toBe(true);
-  expect(auth.isTrustedIp("192.168.1.20", cfg)).toBe(false);
+test("isTrustedIp: 公网白名单命中的 IP 被信任, 且不影响局域网默认信任(并集, 不是替换)", () => {
+  const cfg = { lanTrustRegex: null, publicTrustRegex: "^203\\.0\\.113\\.9$" };
+  expect(auth.isTrustedIp("203.0.113.9", cfg)).toBe(true);   // 公网白名单命中
+  expect(auth.isTrustedIp("192.168.1.20", cfg)).toBe(true);  // 局域网默认信任依然生效
+  expect(auth.isTrustedIp("8.8.8.9", cfg)).toBe(false);      // 没在白名单里的公网地址仍不信任
+});
+
+test("isTrustedIp: 自定义 lanTrustRegex 只调整局域网定义, 不影响公网白名单", () => {
+  const cfg = { lanTrustRegex: "^192\\.168\\.1\\.", publicTrustRegex: "^203\\.0\\.113\\.9$" };
+  expect(auth.isTrustedIp("192.168.1.20", cfg)).toBe(true);   // 命中收窄后的局域网正则
+  expect(auth.isTrustedIp("192.168.2.20", cfg)).toBe(false);  // 局域网正则收窄后不再命中
+  expect(auth.isTrustedIp("203.0.113.9", cfg)).toBe(true);    // 公网白名单不受影响
 });
 
 test("getClientIp: 用 server.requestIP 返回地址, 没有 server 时返回 unknown", () => {
@@ -120,21 +132,21 @@ test("recordSuccess: 清空失败计数, 之前的失败不会累加进下一轮
 test("checkAccess: 未设置密码 => 直接放行(reason=open)", () => {
   const req = new Request("http://x/");
   const server = { requestIP: () => ({ address: "8.8.8.8" }) };
-  const result = auth.checkAccess(req, server, { passwordHash: null, trustedIpsRegex: null });
+  const result = auth.checkAccess(req, server, { passwordHash: null, lanTrustRegex: null, publicTrustRegex: null });
   expect(result).toEqual({ allowed: true, reason: "open" });
 });
 
 test("checkAccess: 设置密码 + 信任 IP => 放行(reason=trusted-ip)", () => {
   const req = new Request("http://x/");
   const server = { requestIP: () => ({ address: "192.168.1.5" }) };
-  const result = auth.checkAccess(req, server, { passwordHash: "h", trustedIpsRegex: null });
+  const result = auth.checkAccess(req, server, { passwordHash: "h", lanTrustRegex: null, publicTrustRegex: null });
   expect(result).toEqual({ allowed: true, reason: "trusted-ip" });
 });
 
 test("checkAccess: 设置密码 + 非信任 IP + 无 session => 拒绝", () => {
   const req = new Request("http://x/");
   const server = { requestIP: () => ({ address: "8.8.8.8" }) };
-  const result = auth.checkAccess(req, server, { passwordHash: "h", trustedIpsRegex: null });
+  const result = auth.checkAccess(req, server, { passwordHash: "h", lanTrustRegex: null, publicTrustRegex: null });
   expect(result).toEqual({ allowed: false, reason: "unauthenticated" });
 });
 
@@ -142,6 +154,6 @@ test("checkAccess: 设置密码 + 非信任 IP + 有效 session => 放行(reason
   const token = auth.createSession();
   const req = new Request("http://x/", { headers: { cookie: `mock_session=${token}` } });
   const server = { requestIP: () => ({ address: "8.8.8.8" }) };
-  const result = auth.checkAccess(req, server, { passwordHash: "h", trustedIpsRegex: null });
+  const result = auth.checkAccess(req, server, { passwordHash: "h", lanTrustRegex: null, publicTrustRegex: null });
   expect(result).toEqual({ allowed: true, reason: "session" });
 });

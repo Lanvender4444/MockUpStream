@@ -9,11 +9,20 @@ export function getClientIp(req, server) {
   return (addr && addr.address) || "unknown";
 }
 
+function testRegexSafe(source, ip) {
+  try { return new RegExp(source).test(ip); }
+  catch { return new RegExp(DEFAULT_PRIVATE_IP_REGEX_SOURCE).test(ip); }
+}
+
+// 局域网信任: 默认私网正则, 可在面板里改成自定义正则(narrow/adjust "局域网"的定义)。
+// 公网白名单: 默认空(不信任任何公网来源), 需要手动加。
+// 两者是并集关系, 命中任意一个就放行 —— 不是"自定义覆盖默认值"。
 export function isTrustedIp(ip, authConfig) {
-  const source = (authConfig && authConfig.trustedIpsRegex) || DEFAULT_PRIVATE_IP_REGEX_SOURCE;
-  let re;
-  try { re = new RegExp(source); } catch { re = new RegExp(DEFAULT_PRIVATE_IP_REGEX_SOURCE); }
-  return re.test(ip);
+  const cfg = authConfig || {};
+  const lanSource = cfg.lanTrustRegex || DEFAULT_PRIVATE_IP_REGEX_SOURCE;
+  if (testRegexSafe(lanSource, ip)) return true;
+  if (cfg.publicTrustRegex && testRegexSafe(cfg.publicTrustRegex, ip)) return true;
+  return false;
 }
 
 export async function hashPassword(password) {
