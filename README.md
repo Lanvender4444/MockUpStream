@@ -14,15 +14,17 @@
 > 端口默认 **8788**，控制台 `http://localhost:8788/`。首次启动自动生成 SQLite 库 `mock.db`（含 3 个示例模型 + 4 个预设）。
 > 下面命令都**在本项目根目录（MockUpStream/）里执行**，用相对路径，拉到哪儿都能跑。
 >
-> ⚠️ **两件事互相独立，别搞混**：
+> **核心两步骤**：
+> 
 > ① **怎么起 mock**（下面第 1 步，本地 or Docker）；
+> 
 > ② **new-api 渠道 Base URL 填什么**（第 2 步，取决于 **new-api 在哪跑**，不是 mock 在哪跑）。
 
 
 
 ### 第 1 步：起 mock（二选一）
 
-**方式 1 · 本地 bun**（宿主机装了 bun）
+**方式 1 · 本地 bun**
 ```bash
 bun run server.js
 ```
@@ -44,7 +46,7 @@ docker compose up            # 项目自带 docker-compose.yml
 | new-api 在哪 | mock 在哪 | 渠道 Base URL |
 |---|---|---|
 | 本地 | 本地 | `http://localhost:8788` |
-| **Docker** | **本地(宿主机)** | **`http://host.docker.internal:8788`** ← 常见：new-api 用 compose 起、mock 本地 `bun run` |
+| **Docker** | **本地(宿主机)** | **`http://host.docker.internal:8788`**  |
 | Docker | Docker（独立 `docker run`/`compose up`） | `http://host.docker.internal:8788` |
 | Docker | Docker（并入 new-api 同一 compose 网络） | `http://mock-upstream:8788`（服务名，最稳） |
 
@@ -58,15 +60,15 @@ docker compose up            # 项目自带 docker-compose.yml
 ### 1. 建渠道（Channels）
 
     类型：OpenAI
-    代理 / Base URL：http://localhost:8788 ← 指向 mock
+    代理 / Base URL：参考上一章节
     密钥：随便填，如 sk-mock
     模型：gpt-3.5-turbo,gpt-4o
     保存后可点「测试」按钮（mock 的 /v1/models 会响应）
 
+
 ### 2. 配模型倍率（Model Ratio / 运营设置）
 
-    确保 gpt-3.5-turbo 配了 modelRatio / completionRatio / cacheRatio
-    否则会报「模型倍率或价格未配置」（relay/helper/price.go:78）
+    确保 配置了对应模型倍率
 
 ### 3. 建令牌（Tokens）
 
@@ -75,12 +77,13 @@ docker compose up            # 项目自带 docker-compose.yml
 ### 4. 修改 TierGroups
 
 系统设置 → 倍率设置 修改TierGroups
-
+```json
 {
   "dev": {"groups": ["default"]},
   "pro": {"groups": ["default", "vip"]},
   "ent": {"groups": ["default", "vip", "svip"]}
 }
+```
 
 ---
 
@@ -106,7 +109,9 @@ docker compose up            # 项目自带 docker-compose.yml
 
 ## 发送API
 
-### **Bash: **
+> 此处 [localhost:3000](http://localhost:3000) 是 new-api 本地运行地址。
+
+### Bash: 
 
 **流式**
 
