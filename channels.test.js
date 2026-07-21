@@ -125,7 +125,7 @@ test("deleteModel: 级联删掉它名下所有 Configuration", async () => {
 });
 
 test("migrateToConfigurations: 老宽表(model+行为字段混一起)升级不丢数据", async () => {
-  const path = "D:/MockUpStream/.tmp-migration-test.db";
+  const path = import.meta.dir + "/.tmp-migration-test.db";
   if (existsSync(path)) unlinkSync(path);
   try {
     const raw = new Database(path);
@@ -171,7 +171,7 @@ test("migrateToConfigurations: 老宽表(model+行为字段混一起)升级不�
 });
 
 test("migrateChannelColumns: 老 channels 表(上一版走 /ch/<id> 路径, 没有 port 列)升级后每个渠道分到不冲突的端口", async () => {
-  const path = "D:/MockUpStream/.tmp-channel-migration-test.db";
+  const path = import.meta.dir + "/.tmp-channel-migration-test.db";
   if (existsSync(path)) unlinkSync(path);
   try {
     const raw = new Database(path);
