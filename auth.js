@@ -72,12 +72,12 @@ export function destroySession(req) {
   if (token) sessions.delete(token);
 }
 
-export function sessionCookieHeader(token) {
-  return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax`;
+export function sessionCookieHeader(token, secure = false) {
+  return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
 }
 
-export function clearSessionCookieHeader() {
-  return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+export function clearSessionCookieHeader(secure = false) {
+  return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
 }
 
 const loginAttempts = new Map(); // ip -> { fails, lockedUntil }

@@ -1,0 +1,34 @@
+# Caddyfile.example —— 公网 + 域名场景的反代示例：Caddy 自动申请/续期 Let's Encrypt 证书终止 HTTPS，
+# mock-upstream 自己留明文 HTTP 就行(不用配 MOCK_TLS_CERT/KEY)。
+#
+# 用法：把这段存成 Caddyfile，改成你自己的域名，然后：
+#   caddy run --config Caddyfile
+# 或者跟 mock-upstream 一起塞进同一个 docker-compose 网络里跑（见下方注释）。
+#
+# 前提：域名已解析到这台机器的公网 IP，80/443 端口对外开放（Let's Encrypt HTTP-01 挑战要用 80）。
+
+your-domain.com {
+	reverse_proxy localhost:8788
+}
+
+# ---- 如果 mock-upstream 和 Caddy 都跑在同一个 docker-compose 网络里 ----
+# your-domain.com {
+# 	reverse_proxy mock-upstream:8788
+# }
+#
+# docker-compose.yml 里加一个 caddy 服务大致长这样：
+#
+# services:
+#   caddy:
+#     image: caddy:2
+#     restart: unless-stopped
+#     ports: ["80:80", "443:443"]
+#     volumes:
+#       - ./Caddyfile:/etc/caddyfile
+#       - caddy_data:/data
+#     command: caddy run --config /etc/caddyfile
+#   mock-upstream:
+#     # ...(照旧，不用暴露 8788 到宿主机了，走 caddy 网络内部访问即可)
+#
+# volumes:
+#   caddy_data:

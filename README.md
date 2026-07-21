@@ -188,6 +188,25 @@ curl http://localhost:3000/v1/chat/completions ^
 
 ---
 
+## HTTPS（可选，更安全）
+
+默认是明文 HTTP —— 本地/纯局域网用没什么问题，但如果给局域网同事甚至公网用，"网络与安全"里设的管理密码是走 `/__auth/login` POST 明文传的，没有 HTTPS 会被同网段的人抓包看到。两种场景，做法不一样：
+
+**局域网/自用：自签证书**
+```bash
+bash scripts/gen-cert.sh       # 生成证书，SAN 覆盖 localhost + 本机所有局域网 IP
+```
+然后带着两个环境变量启动：
+- Bash：`MOCK_TLS_CERT=certs/cert.pem MOCK_TLS_KEY=certs/key.pem bun run server.js`
+- PowerShell：`$env:MOCK_TLS_CERT="certs/cert.pem"; $env:MOCK_TLS_KEY="certs/key.pem"; bun run server.js`
+
+两个环境变量都给了、且文件都存在，才会切到 HTTPS；没给就还是明文 HTTP，不影响现有用法。自签证书首次访问浏览器会报"不安全"，点"继续访问"/"高级 → 继续前往"即可 —— 传输已经加密了，只是没有公共 CA 背书，属于预期行为。`certs/` 已经在 `.gitignore` 和 `.dockerignore` 里，不会被提交或打进镜像。
+
+**公网 + 域名：交给反代**
+自签证书不适合真正暴露在公网（浏览器会一直报不可信）。有域名的话，推荐用 Caddy/nginx 之类的反代在前面终止 HTTPS（Caddy 能自动申请/续期 Let's Encrypt 证书），mock 自己留明文 HTTP、只监听在反代能访问到的地方即可。参考仓库里的 [`Caddyfile.example`](./Caddyfile.example)。
+
+---
+
 ## APIFox 接入
 
 <p align="left">
@@ -229,6 +248,9 @@ MockUpStream/
 ├── docker-compose.yml   # 独立 Docker 运行（相对挂载）
 ├── Dockerfile           # 自包含镜像（CI 构建并推到 GHCR，无需挂载）
 ├── .github/workflows/   # CI(bun test) + Docker 镜像发布
+├── tls.js               # HTTPS 证书路径解析(自签证书场景)
+├── scripts/gen-cert.sh  # 生成本地自签证书
+├── Caddyfile.example    # 公网+域名场景的反代示例(自动 HTTPS)
 ├── mock.db              # SQLite 持久化（自动生成，可删除以重置；已 gitignore）
 └── formats.test.js      # bun test
 ```

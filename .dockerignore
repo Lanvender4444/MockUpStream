@@ -3,6 +3,8 @@
 docs
 mock.db
 config.json
+certs
 *.test.js
 README.md
 APIFox.md
+Caddyfile.example

@@ -1,4 +1,5 @@
 mock.db
 config.json
+certs/
 
 /docs/*

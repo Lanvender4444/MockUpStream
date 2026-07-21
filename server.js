@@ -8,6 +8,10 @@
 //   Gemini  渠道 -> http://localhost:8788           (打 /v1beta/models/{m}:generateContent)
 //   Docker 下把 localhost 换成 host.docker.internal 或 compose 服务名。
 //
+// HTTPS：给 MOCK_TLS_CERT / MOCK_TLS_KEY 两个环境变量(证书/私钥文件路径)即可原生起 HTTPS，见 tls.js。
+// 局域网自用：bash scripts/gen-cert.sh 生成自签证书。公网+域名：推荐 Caddy/nginx 反代终止 HTTPS，
+// mock 自己留 HTTP 就行，见 Caddyfile.example 和 README「HTTPS」一节。
+//
 // 局域网/公网访问 + 控制台身份验证：
 //   面板"网络与安全"区块可设置管理密码 + 信任 IP 正则，落库 mock.db（重启不丢，跟模型/预设一样）。
 //   未设置密码时，控制台和 /v1/* 一样保持完全开放（不影响现有本地用法）。
@@ -15,12 +19,15 @@
 import { networkInterfaces } from "os";
 import * as store from "./store.js";
 import * as auth from "./auth.js";
+import { resolveTls } from "./tls.js";
 import { shouldInjectError } from "./usage.js";
 import * as openai from "./formats/openai.js";
 import * as claude from "./formats/claude.js";
 import * as gemini from "./formats/gemini.js";
 
 const PORT = Number(process.env.MOCK_PORT || 8788);
+const TLS = resolveTls();
+const PROTOCOL = TLS ? "https" : "http";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const recent = [];
 function record(e) { recent.unshift({ t: new Date().toISOString().slice(11, 19), ...e }); if (recent.length > 25) recent.pop(); }
@@ -153,6 +160,7 @@ function usageTag(fmtName, resp) {
 
 Bun.serve({
   port: PORT,
+  ...(TLS ? { tls: { cert: Bun.file(TLS.certPath), key: Bun.file(TLS.keyPath) } } : {}),
   async fetch(req, server) {
     const url = new URL(req.url);
     const p = url.pathname;
@@ -192,14 +200,14 @@ Bun.serve({
       const token = auth.createSession();
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
-        headers: { "Content-Type": "application/json", "Set-Cookie": auth.sessionCookieHeader(token) },
+        headers: { "Content-Type": "application/json", "Set-Cookie": auth.sessionCookieHeader(token, !!TLS) },
       });
     }
     if (p === "/__auth/logout" && req.method === "POST") {
       auth.destroySession(req);
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
-        headers: { "Content-Type": "application/json", "Set-Cookie": auth.clearSessionCookieHeader() },
+        headers: { "Content-Type": "application/json", "Set-Cookie": auth.clearSessionCookieHeader(!!TLS) },
       });
     }
     if (p === "/__auth/config" && req.method === "POST") {
@@ -283,10 +291,11 @@ Bun.serve({
   },
 });
 
-console.log(`mock upstream listening on http://localhost:${PORT}`);
-console.log(`→ 控制台:      http://localhost:${PORT}/`);
-console.log(`→ 渠道 Base URL: http://localhost:${PORT}   (Docker: http://host.docker.internal:${PORT})`);
+console.log(`mock upstream listening on ${PROTOCOL}://localhost:${PORT}`);
+console.log(`→ 控制台:      ${PROTOCOL}://localhost:${PORT}/`);
+console.log(`→ 渠道 Base URL: ${PROTOCOL}://localhost:${PORT}   (Docker: ${PROTOCOL}://host.docker.internal:${PORT})`);
 console.log(`  OpenAI /v1/chat/completions · Claude /v1/messages · Gemini /v1beta/models/{m}:generateContent`);
+if (TLS) console.log(`  HTTPS 已启用(证书: ${TLS.certPath})。自签证书首次访问浏览器会报不可信，点"继续访问"即可；公网+域名场景建议改用 Caddy/nginx 反代，见 README。`);
 if (!store.getAuthConfig().passwordHash) {
   console.log(`  提醒: 控制台尚未设置密码，谁都能访问和修改配置。要给局域网/公网同事用之前，去面板"网络与安全"设一个。`);
 }
