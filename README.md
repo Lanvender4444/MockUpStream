@@ -27,6 +27,7 @@
 **方式 1 · 本地 bun**
 ```bash
 bun run server.js
+bun run https                 # 走 HTTPS，需要先跑一次 scripts/gen-cert.sh 生成证书
 ```
 自定义端口：Bash `MOCK_PORT=9999 bun run server.js`／PowerShell `$env:MOCK_PORT=9999; bun run server.js`／CMD `set MOCK_PORT=9999 && bun run server.js`
 
@@ -202,6 +203,8 @@ bash scripts/gen-cert.sh       # 生成证书，SAN 覆盖 localhost + 本机所
 
 两个环境变量都给了、且文件都存在，才会切到 HTTPS；没给就还是明文 HTTP，不影响现有用法。自签证书首次访问浏览器会报"不安全"，点"继续访问"/"高级 → 继续前往"即可 —— 传输已经加密了，只是没有公共 CA 背书，属于预期行为。`certs/` 已经在 `.gitignore` 和 `.dockerignore` 里，不会被提交或打进镜像。
 
+`gen-cert.sh` 装了 [mkcert](https://github.com/FiloSottile/mkcert) 会优先用它（`winget install FiloSottile.mkcert` 装）：`mkcert -install` 把本地根证书装进系统信任库，之后浏览器访问不会有任何"不安全"警告，比 openssl 自签证书体验好。`bun run https` 默认读 `certs/cert.pem` + `certs/key.pem`，等价于上面那两行手动带环境变量启动。
+
 **公网 + 域名：交给反代**
 自签证书不适合真正暴露在公网（浏览器会一直报不可信）。有域名的话，推荐用 Caddy/nginx 之类的反代在前面终止 HTTPS（Caddy 能自动申请/续期 Let's Encrypt 证书），mock 自己留明文 HTTP、只监听在反代能访问到的地方即可。参考仓库里的 [`Caddyfile.example`](./Caddyfile.example)。
 
@@ -249,6 +252,7 @@ MockUpStream/
 ├── Dockerfile           # 自包含镜像（CI 构建并推到 GHCR，无需挂载）
 ├── .github/workflows/   # CI(bun test) + Docker 镜像发布
 ├── tls.js               # HTTPS 证书路径解析(自签证书场景)
+├── package.json         # bun run start / bun run https 两个命令别名，没有依赖
 ├── scripts/gen-cert.sh  # 生成本地自签证书
 ├── Caddyfile.example    # 公网+域名场景的反代示例(自动 HTTPS)
 ├── mock.db              # SQLite 持久化（自动生成，可删除以重置；已 gitignore）
