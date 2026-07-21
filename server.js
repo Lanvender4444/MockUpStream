@@ -103,7 +103,7 @@ document.getElementById("f").addEventListener("submit", async (e) => {
 </body></html>`;
 }
 
-// 通用: 处理一次上游请求(某格式)。channel 为 null 表示走的是不带 /ch/ 前缀的直连路径。
+// 通用: 处理一次上游请求(某格式)。channel 为 null 表示走的是主端口的直连请求(不经过任何渠道)。
 async function handleUpstream(fmtName, fmt, req, url, channel) {
   const body = await req.json().catch(() => ({}));
   const parsed = fmt.parseRequest(body, url);
@@ -114,7 +114,7 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
     return json(fmt.buildError({ errorMessage: channel.errorMessage, errorStatus: channel.errorStatus }), Number(channel.errorStatus));
   }
 
-  const cfg = store.resolveModel(parsed.model, fmtName);
+  const cfg = store.resolveModel(parsed.model, fmtName, channel ? channel.id : null);
 
   const latencyMs = resolveLatencyMs(cfg) + (channel ? Number(channel.extraLatencyMs) || 0 : 0);
   if (latencyMs > 0) await sleep(latencyMs);
@@ -168,23 +168,66 @@ function usageTag(fmtName, resp) {
   const u = resp.usageMetadata; return `p${u.promptTokenCount}/c${u.candidatesTokenCount}/cache${u.cachedContentTokenCount || 0}`;
 }
 
+// 上游三种协议的路由表，主端口(channel=null)和每个渠道自己的独立端口都复用这一份。
+// 返回 Response 表示命中了；返回 null 表示这条路径不归这层管，调用方自己接着 404。
+async function routeUpstream(p, req, url, channel) {
+  if (p === "/v1/models") {
+    if (shouldChannelFail(channel)) return json({ error: { message: channel.errorMessage, type: "channel_unavailable" } }, Number(channel.errorStatus));
+    const data = store.getState().models
+      .filter((m) => m.format === "openai")
+      .map((m) => ({ id: m.id, object: "model", owned_by: "mock" }));
+    if (!data.length) data.push({ id: "gpt-3.5-turbo", object: "model", owned_by: "mock" });
+    return json({ object: "list", data });
+  }
+  if (p === "/v1/chat/completions" && req.method === "POST") return handleUpstream("openai", openai, req, url, channel);
+  if (p === "/v1/messages" && req.method === "POST") return handleUpstream("claude", claude, req, url, channel);
+  if (p.match(/\/models\/[^:]+:(generateContent|streamGenerateContent)/) && req.method === "POST")
+    return handleUpstream("gemini", gemini, req, url, channel);
+  return null;
+}
+
+// ---------- 每个渠道一个独立端口，动态起停(改端口/新建/删除都不用重启主进程) ----------
+const channelListeners = new Map(); // channelId -> Bun.serve() 实例
+
+function startChannelListener(channel) {
+  const existing = channelListeners.get(channel.id);
+  if (existing) {
+    if (existing.port === channel.port) return; // 端口没变, 现成的接着用
+    try { existing.stop(); } catch {}
+    channelListeners.delete(channel.id);
+  }
+  try {
+    const srv = Bun.serve({
+      port: channel.port,
+      ...(TLS ? { tls: { cert: Bun.file(TLS.certPath), key: Bun.file(TLS.keyPath) } } : {}),
+      async fetch(req) {
+        const url = new URL(req.url);
+        // 实时查一次渠道(不是闭包里存的那份快照)：enabled/errorRate 这些字段改了立刻生效，不用重启监听。
+        const live = store.getChannel(channel.id);
+        if (!live) return new Response("mock upstream: channel removed", { status: 404 });
+        const resp = await routeUpstream(url.pathname, req, url, live);
+        return resp || new Response(`mock upstream(渠道 ${live.id}): not found ` + url.pathname, { status: 404 });
+      },
+    });
+    channelListeners.set(channel.id, srv);
+    return true;
+  } catch (e) {
+    console.error(`  渠道「${channel.name}」端口 ${channel.port} 启动失败(可能被占用): ${e.message}`);
+    return false;
+  }
+}
+
+function stopChannelListener(channelId) {
+  const existing = channelListeners.get(channelId);
+  if (existing) { try { existing.stop(); } catch {} channelListeners.delete(channelId); }
+}
+
 Bun.serve({
   port: PORT,
   ...(TLS ? { tls: { cert: Bun.file(TLS.certPath), key: Bun.file(TLS.keyPath) } } : {}),
   async fetch(req, server) {
     const url = new URL(req.url);
-    let p = url.pathname;
-
-    // ---------- 渠道路由：/ch/<channelId>/... 复用下面所有 /v1/... 路由，剥掉前缀后当正常路径走 ----------
-    // 渠道是否健康(禁用/错误率)留到 handleUpstream 里查(那时候才知道具体是哪个协议格式，错误体形状才对得上)；
-    // 这里只管"这个渠道 id 存不存在"——根本没这个渠道，就跟 Base URL 写错一样，直接 404。
-    let channel = null;
-    const chMatch = p.match(/^\/ch\/([^/]+)(\/.*)$/);
-    if (chMatch) {
-      channel = store.getChannel(decodeURIComponent(chMatch[1]));
-      if (!channel) return new Response("mock upstream: unknown channel " + chMatch[1], { status: 404 });
-      p = chMatch[2];
-    }
+    const p = url.pathname;
 
     // ---------- 身份验证网关：控制台页面 + 全部 /__* 管理接口 ----------
     const authExempt = p === "/__auth/login" || p === "/__auth/status" || p.startsWith("/vendor/");
@@ -273,11 +316,19 @@ Bun.serve({
       await store.deleteModel(decodeURIComponent(p.slice("/__models/".length)));
       return json({ ok: true });
     }
-    if (p.match(/^\/__models\/.+\/apply-preset$/) && req.method === "POST") {
+    if (p === "/__configs" && req.method === "POST") {
+      const c = await req.json().catch(() => ({}));
+      return json({ ok: true, config: await store.upsertConfig(c) });
+    }
+    if (p.startsWith("/__configs/") && req.method === "DELETE") {
+      await store.deleteConfig(decodeURIComponent(p.slice("/__configs/".length)));
+      return json({ ok: true });
+    }
+    if (p.match(/^\/__configs\/.+\/apply-preset$/) && req.method === "POST") {
       const id = decodeURIComponent(p.split("/")[2]);
       const { name } = await req.json().catch(() => ({}));
-      const model = await store.applyPreset(id, name);
-      return model ? json({ ok: true, model }) : json({ error: "model or preset not found" }, 404);
+      const config = await store.applyPreset(id, name);
+      return config ? json({ ok: true, config }) : json({ error: "configuration or preset not found" }, 404);
     }
     if (p === "/__presets" && req.method === "POST") {
       const { name, patch } = await req.json().catch(() => ({}));
@@ -290,27 +341,33 @@ Bun.serve({
     }
     if (p === "/__channels" && req.method === "POST") {
       const c = await req.json().catch(() => ({}));
-      return json({ ok: true, channel: await store.upsertChannel(c) });
+      if (c.port != null && Number(c.port) === PORT)
+        return json({ error: `端口 ${PORT} 是主服务自己在用的，换一个` }, 400);
+      let saved;
+      try {
+        saved = await store.upsertChannel(c);
+      } catch (e) {
+        return json({ error: e.message }, 400);
+      }
+      const ok = startChannelListener(saved);
+      return json({ ok: true, channel: saved, listening: ok });
     }
     if (p.startsWith("/__channels/") && req.method === "DELETE") {
-      await store.deleteChannel(decodeURIComponent(p.slice("/__channels/".length)));
+      const id = decodeURIComponent(p.slice("/__channels/".length));
+      stopChannelListener(id);
+      await store.deleteChannel(id);
       return json({ ok: true });
     }
-    if (p === "/__reset" && req.method === "POST") return json({ ok: true, state: await store.reset() });
-
-    // ---------- 上游 API ----------
-    if (p === "/v1/models") {
-      if (shouldChannelFail(channel)) return json({ error: { message: channel.errorMessage, type: "channel_unavailable" } }, Number(channel.errorStatus));
-      const data = store.getState().models
-        .filter((m) => m.format === "openai")
-        .map((m) => ({ id: m.id, object: "model", owned_by: "mock" }));
-      if (!data.length) data.push({ id: "gpt-3.5-turbo", object: "model", owned_by: "mock" });
-      return json({ object: "list", data });
+    if (p === "/__reset" && req.method === "POST") {
+      for (const id of [...channelListeners.keys()]) stopChannelListener(id);
+      const state = await store.reset();
+      for (const channel of state.channels) startChannelListener(channel);
+      return json({ ok: true, state });
     }
-    if (p === "/v1/chat/completions" && req.method === "POST") return handleUpstream("openai", openai, req, url, channel);
-    if (p === "/v1/messages" && req.method === "POST") return handleUpstream("claude", claude, req, url, channel);
-    if (p.match(/\/models\/[^:]+:(generateContent|streamGenerateContent)/) && req.method === "POST")
-      return handleUpstream("gemini", gemini, req, url, channel);
+
+    // ---------- 上游 API(不带渠道，直连默认行为——渠道专属的走各自独立端口，见文件末尾) ----------
+    const upstreamResp = await routeUpstream(p, req, url, null);
+    if (upstreamResp) return upstreamResp;
 
     return new Response("mock upstream: not found " + p, { status: 404 });
   },
@@ -325,12 +382,21 @@ console.log(`mock upstream listening on ${PROTOCOL}://localhost:${PORT}`);
 console.log(`→ 控制台:      ${PROTOCOL}://localhost:${PORT}/`);
 console.log(`→ 渠道 Base URL: ${PROTOCOL}://localhost:${PORT}   (Docker: ${PROTOCOL}://host.docker.internal:${PORT})`);
 console.log(`  OpenAI /v1/chat/completions · Claude /v1/messages · Gemini /v1beta/models/{m}:generateContent`);
-const seededChannels = store.getState().channels;
-if (seededChannels.length) {
-  console.log(`  模拟多渠道(在控制台 Channels 标签页管理，可增删/开关/调错误率延迟)：`);
-  for (const c of seededChannels) console.log(`    ${c.name.padEnd(14)} ${PROTOCOL}://localhost:${PORT}/ch/${c.id}`);
-}
 if (TLS) console.log(`  HTTPS 已启用(证书: ${TLS.certPath})。自签证书首次访问浏览器会报不可信，点"继续访问"即可；公网+域名场景建议改用 Caddy/nginx 反代，见 README。`);
 if (!store.getAuthConfig().passwordHash) {
   console.log(`  提醒: 控制台尚未设置密码，谁都能访问和修改配置。要给局域网/公网同事用之前，去面板"网络与安全"设一个。`);
 }
+
+// ---------- 每个渠道一个独立端口 ----------
+// 不用路径前缀(/ch/<id>)：很多 OpenAI 兼容客户端拼 URL 时用"前导斜杠"相对路径解析(new URL("/v1/...", base))，
+// 会把 base 自带的路径整段吃掉退回裸 host:port——独立端口跟主端口结构完全一样，没有路径可丢，对任何客户端零风险。
+// 渠道专属端口只服务 /v1/* 这几条上游路由，不服务控制台/管理接口(那些是主端口的事)。
+// 某个渠道的端口被占用不该拖累主服务和其它渠道，startChannelListener() 内部自己 try/catch，失败了打日志继续。
+const seededChannels = store.getState().channels;
+if (seededChannels.length) {
+  console.log(`  模拟多渠道(在控制台 Channels 标签页管理，可增删/开关/调错误率延迟/改端口，改了立刻生效不用重启)：`);
+  for (const channel of seededChannels) {
+    if (startChannelListener(channel)) console.log(`    ${channel.name.padEnd(14)} ${PROTOCOL}://localhost:${channel.port}`);
+  }
+}
+

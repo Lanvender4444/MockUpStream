@@ -324,6 +324,51 @@
   -Body '{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"测试"}]}'</pre>
           <div class="hint">HTTPS 模式下把 <code>http://</code> 换成 <code>https://</code>；自签证书场景 <code>curl.exe</code> 加 <code>-k</code> 跳过校验，<code>Invoke-RestMethod</code> 加 <code>-SkipCertificateCheck</code>。</div>
         </div>
+
+        <div class="card">
+          <h2>多渠道调度测试（Channels）</h2>
+          <div class="card-sub">默认只有一个 Base URL；这个功能能模拟出多个"渠道"，专门用来测 new-api 的权重分流/失败转移/限流调度这类跨渠道逻辑。</div>
+          <div class="tutorial-step">
+            <div class="tutorial-step-num">1</div>
+            <div class="tutorial-step-body">
+              <div class="tutorial-step-title">建渠道</div>
+              <div class="hint" style="margin-top:0">
+                去 <b>Channels</b> 标签页建几个渠道（已经预置了 <code>primary</code>/<code>backup</code>/<code>flaky</code> 三个示例）。每个渠道是<b>独立端口</b>，不是路径——Base URL 长得跟主服务一模一样，只是端口号不同（比如 <code>http://localhost:8790</code>），换端口立刻生效不用重启。
+              </div>
+            </div>
+          </div>
+          <div class="tutorial-step">
+            <div class="tutorial-step-num">2</div>
+            <div class="tutorial-step-body">
+              <div class="tutorial-step-title">给模型建"绑渠道"的 Configuration</div>
+              <div class="hint" style="margin-top:0">
+                去 <b>Models</b> 标签页选一个模型，在 Configurations 里新建一份（或用预置的 <code>grok-4.5</code> 示例——它已经绑好了 backup/flaky 两份）。
+                在表单的「绑定渠道」里点一下要绑的渠道，改完延迟/错误率这些字段后点 Save Configuration。
+                不绑任何渠道的那份是这个模型的默认兜底——某个渠道没配专属 Configuration 时，请求会自动落到默认那份，不会报错。
+              </div>
+            </div>
+          </div>
+          <div class="tutorial-step">
+            <div class="tutorial-step-num">3</div>
+            <div class="tutorial-step-body">
+              <div class="tutorial-step-title">在 new-api 里建多个渠道，分别指向不同端口</div>
+              <div class="hint" style="margin-top:0">
+                跟第一步"建单个渠道"一样的流程，只是这次建 2～3 个渠道，Base URL 分别填 Model Configuration 页面「调用路径 — 各渠道」那块列出来的地址（每个渠道一个端口，直接复制）。
+                模型名填同一批（比如都填 <code>grok-4.5</code>），然后在渠道列表里设权重/优先级——因为每个渠道下 <code>grok-4.5</code> 的实际表现不一样（延迟不同/偶发报错），就能实测 new-api 的权重分流、某渠道报错时是否正确转移到别的渠道。
+              </div>
+            </div>
+          </div>
+          <div class="tutorial-step">
+            <div class="tutorial-step-num">4</div>
+            <div class="tutorial-step-body">
+              <div class="tutorial-step-title">排查：Base URL 打不通/被客户端搞错</div>
+              <div class="hint" style="margin-top:0">
+                渠道走独立端口而不是路径前缀，就是为了避开"客户端拼 URL 把路径吃掉/搞错，结果打到官方默认端点"这类兼容性问题——独立端口跟主服务结构完全一样，理论上不会有这个坑。
+                如果还是连不上，先用「直接发请求」卡片里的 curl 命令直接打一下渠道的端口，能通就说明 mock 这边没问题，问题在 new-api 的渠道配置（比如公网/容器场景没把渠道端口一起开放/映射出去）。
+              </div>
+            </div>
+          </div>
+        </div>
         </div>
       </template>
 
@@ -332,16 +377,16 @@
         <div>
           <div class="card">
             <h2>Presets</h2>
-            <div class="card-sub">一键套用到当前模型，仍需点「保存」写入生效</div>
+            <div class="card-sub">一键套用到当前选中的 Configuration，仍需点「保存」写入生效</div>
             <div class="btns" style="flex-wrap:wrap">
               <template x-for="p in presets" :key="p.name">
-                <button class="sm" @click="applyPreset(p.name)" x-text="p.name"></button>
+                <button class="sm" :disabled="!selConfig" @click="applyPreset(p.name)" x-text="p.name"></button>
               </template>
             </div>
           </div>
 
           <div class="card" x-show="sel">
-            <h2>Model Configuration</h2>
+            <h2>Model</h2>
             <div class="card-sub" x-text="sel ? sel.id : ''"></div>
             <div class="row"><label>模型名 id</label><input x-model="sel.id" /></div>
             <div class="row"><label>厂商</label>
@@ -355,48 +400,80 @@
               </div>
             </div>
             <div class="hint" style="margin:-4px 0 10px">决定协议格式（<span x-text="VENDOR_FORMAT_MAP[sel.vendor]"></span>），不确定选哪个厂商就用「自定义」——按你实际要模拟的协议选。</div>
-            <div class="row"><label>回复内容</label><textarea x-model="sel.content"></textarea></div>
+            <div class="btns"><button class="primary" @click="saveModel()">Save</button></div>
+
+            <div class="field-label" style="margin-top:16px">Configurations —— 这个模型的多份行为快照，可以各绑不同渠道</div>
+            <div class="card-sub" style="margin:0 0 10px">没绑渠道的那份(排最前面的)是默认兜底：走主服务端口的直连请求、或者渠道没配专属 Configuration 时都用它。</div>
+            <div class="btns" style="flex-wrap:wrap; margin-bottom:10px">
+              <template x-for="c in modelConfigs()" :key="c.id">
+                <button class="sm" :class="{primary: selConfig && selConfig.id===c.id}" @click="selectConfig(c.id)">
+                  <span x-text="c.name"></span><span x-show="c.channelIds.length" x-text="' · ' + c.channelIds.join(',')"></span>
+                </button>
+              </template>
+              <button class="sm" @click="openNewConfigDialog()">+ New Configuration</button>
+            </div>
+
+          <template x-if="selConfig">
+          <div>
+            <div class="row"><label>配置名</label><input x-model="selConfig.name" /></div>
+            <div class="row"><label>绑定渠道</label>
+              <div class="btns" style="flex-wrap:wrap">
+                <template x-for="ch in channels" :key="ch.id">
+                  <button type="button" class="sm" :class="{primary: selConfig.channelIds.includes(ch.id)}"
+                          @click="toggleConfigChannel(ch.id, !selConfig.channelIds.includes(ch.id))" x-text="ch.name"></button>
+                </template>
+                <span class="hint" style="margin:0" x-show="!channels.length">还没建渠道，先去 Channels 标签页建一个</span>
+              </div>
+            </div>
+            <div class="hint" style="margin:-4px 0 10px">点一下切换选中/取消，不选任何渠道 = 这份配置是该模型的兜底默认。</div>
+            <div class="row"><label>回复内容</label><textarea x-model="selConfig.content"></textarea></div>
             <div class="hint" style="margin:-4px 0 10px">回复内容=实际返回的文本（原样，不截断）；「输出 token」只是<b>上报的计费数字</b>，与正文长度无关，互不影响。</div>
             <div class="row"><label>输入 token</label>
               <div class="grid2">
-                <select x-model="sel.promptMode"><option value="auto">auto（按输入估算）</option><option value="fixed">fixed（固定）</option></select>
-                <input type="number" x-model.number="sel.promptTokens" />
+                <select x-model="selConfig.promptMode"><option value="auto">auto（按输入估算）</option><option value="fixed">fixed（固定）</option></select>
+                <input type="number" x-model.number="selConfig.promptTokens" />
               </div>
             </div>
-            <div class="row"><label>输出 token</label><input type="number" x-model.number="sel.completionTokens" /></div>
+            <div class="row"><label>输出 token</label><input type="number" x-model.number="selConfig.completionTokens" /></div>
             <div class="row"><label>缓存命中</label>
               <div class="grid2">
-                <select x-model="sel.cacheMode"><option value="none">none</option><option value="ratio">ratio（比例）</option><option value="fixed">fixed（固定）</option></select>
-                <input type="number" step="0.05" x-model.number="sel.cacheRatio" x-show="sel.cacheMode==='ratio'" />
-                <input type="number" x-model.number="sel.cachedTokens" x-show="sel.cacheMode==='fixed'" />
+                <select x-model="selConfig.cacheMode"><option value="none">none</option><option value="ratio">ratio（比例）</option><option value="fixed">fixed（固定）</option></select>
+                <input type="number" step="0.05" x-model.number="selConfig.cacheRatio" x-show="selConfig.cacheMode==='ratio'" />
+                <input type="number" x-model.number="selConfig.cachedTokens" x-show="selConfig.cacheMode==='fixed'" />
               </div>
             </div>
-            <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="sel.cacheCreationTokens" /></div>
+            <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="selConfig.cacheCreationTokens" /></div>
             <div class="row"><label>响应延迟 ms</label>
               <div class="grid2">
-                <select x-model="sel.latencyMode"><option value="fixed">fixed（固定）</option><option value="range">range（范围随机）</option></select>
-                <input type="number" x-model.number="sel.latencyMs" x-show="sel.latencyMode==='fixed'" />
+                <select x-model="selConfig.latencyMode"><option value="fixed">fixed（固定）</option><option value="range">range（范围随机）</option></select>
+                <input type="number" x-model.number="selConfig.latencyMs" x-show="selConfig.latencyMode==='fixed'" />
               </div>
             </div>
-            <div class="row" x-show="sel.latencyMode==='range'"><label>延迟范围 ms</label>
+            <div class="row" x-show="selConfig.latencyMode==='range'"><label>延迟范围 ms</label>
               <div class="grid2">
-                <input type="number" x-model.number="sel.latencyMin" placeholder="最小" />
-                <input type="number" x-model.number="sel.latencyMax" placeholder="最大" />
+                <input type="number" x-model.number="selConfig.latencyMin" placeholder="最小" />
+                <input type="number" x-model.number="selConfig.latencyMax" placeholder="最大" />
               </div>
             </div>
-            <div class="row" x-show="sel.latencyMode==='range'"><label>分布</label>
-              <select x-model="sel.latencyDist"><option value="uniform">均匀随机数</option><option value="normal">正态分布随机数</option></select>
+            <div class="row" x-show="selConfig.latencyMode==='range'"><label>分布</label>
+              <select x-model="selConfig.latencyDist"><option value="uniform">均匀随机数</option><option value="normal">正态分布随机数</option></select>
             </div>
-            <div class="hint" x-show="sel.latencyMode==='range'" style="margin:-4px 0 10px">均匀：区间内等概率；正态：以区间中点为均值、区间的六分之一为标准差，两端极小概率的尾部会被夹回区间内，不会溢出。每次请求都会重新采样一次延迟值，可以在「Recent Requests」里看实际用了多少 ms。</div>
-            <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="sel.chunkDelayMs" /></div>
+            <div class="hint" x-show="selConfig.latencyMode==='range'" style="margin:-4px 0 10px">均匀：区间内等概率；正态：以区间中点为均值、区间的六分之一为标准差，两端极小概率的尾部会被夹回区间内，不会溢出。每次请求都会重新采样一次延迟值，可以在「Recent Requests」里看实际用了多少 ms。</div>
+            <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="selConfig.chunkDelayMs" /></div>
             <div class="row"><label>注入错误码</label>
               <div class="grid2">
-                <select x-model.number="sel.errorStatus"><option :value="0">不注入</option><option :value="400">400</option><option :value="401">401</option><option :value="403">403</option><option :value="429">429</option><option :value="500">500</option><option :value="503">503</option></select>
-                <input type="number" min="0" max="100" x-model.number="sel.errorRate" title="触发概率 %" />
+                <select x-model.number="selConfig.errorStatus"><option :value="0">不注入</option><option :value="400">400</option><option :value="401">401</option><option :value="403">403</option><option :value="429">429</option><option :value="500">500</option><option :value="503">503</option></select>
+                <input type="number" min="0" max="100" x-model.number="selConfig.errorRate" title="触发概率 %" />
               </div>
             </div>
-            <div class="row"><label>错误信息</label><input x-model="sel.errorMessage" /></div>
-            <div class="btns"><button class="primary" @click="saveModel()">Save</button><button @click="openSaveAsPreset()">另存为预设</button></div>
+            <div class="row"><label>错误信息</label><input x-model="selConfig.errorMessage" /></div>
+            <div class="btns">
+              <button class="primary" @click="saveConfig()">Save Configuration</button>
+              <button @click="openSaveAsPreset()">另存为预设</button>
+              <button class="danger" @click="delConfig()" x-show="modelConfigs().length>1">Delete Configuration</button>
+            </div>
+          </div>
+          </template>
 
             <div class="field-label">调用路径 — 本机本地</div>
             <div class="ep"><code x-text="endpointFor('http://localhost:' + port)"></code><button class="sm" @click="copy(endpointFor('http://localhost:' + port))">Copy</button></div>
@@ -413,7 +490,16 @@
             <div class="field-label">调用路径 — 公网</div>
             <div class="ep"><code x-text="endpointFor('http://&lt;你的公网地址或域名&gt;:' + port)"></code></div>
 
-            <div class="hint">容器场景记得选「本机 Docker」那条，不要给容器里的 new-api 填 localhost。</div>
+            <div class="field-label">调用路径 — 各渠道（挑一个当 new-api 渠道的 Base URL，测权重/失败转移/限流调度用；独立端口，结构跟上面的主服务地址完全一样）</div>
+            <template x-for="ch in channels" :key="ch.id">
+              <div class="ep">
+                <code x-text="ch.name + '： ' + endpointFor(channelUrl(ch))"></code>
+                <button class="sm" @click="copy(endpointFor(channelUrl(ch)))">Copy</button>
+              </div>
+            </template>
+            <div class="hint" x-show="!channels.length" style="margin:0">还没建渠道，去 Channels 标签页建一个</div>
+
+            <div class="hint">容器场景记得选「本机 Docker」那条，不要给容器里的 new-api 填 localhost；容器场景下渠道端口也要在 docker-compose/run 里一并映射出去，不然只有主端口能连到。</div>
           </div>
         </div>
       </template>
@@ -485,30 +571,31 @@
       <template x-if="tab==='channels'">
         <div class="card">
           <h2>Channels（模拟多个上游渠道）</h2>
-          <div class="card-sub">每个渠道有自己的 Base URL（<code>/ch/&lt;id&gt;</code>），配成 new-api 里不同的渠道，测权重/失败转移/限流这些跨渠道逻辑。不加 <code>/ch/</code> 前缀的原有请求路径完全不受影响。</div>
+          <div class="card-sub">每个渠道是独立端口（不是路径前缀）——很多 OpenAI 兼容客户端拼 URL 时会把带路径的 Base URL 处理错，独立端口跟主服务结构完全一样，对任何客户端都零风险。配成 new-api 里不同的渠道，测权重/失败转移/限流这些跨渠道逻辑。</div>
           <table>
-            <thead><tr><th>Name</th><th>Enabled</th><th>Error Rate %</th><th>Extra Latency ms</th><th>Base URL</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Port</th><th>Enabled</th><th>Error Rate %</th><th>Extra Latency ms</th><th>Base URL</th><th></th></tr></thead>
             <tbody>
               <template x-for="c in channels" :key="c.id">
                 <tr>
                   <td><input x-model="c.name" @change="saveChannel(c)" /></td>
+                  <td><input type="number" min="1" max="65535" x-model.number="c.port" @change="saveChannel(c)" /></td>
                   <td style="text-align:center"><input type="checkbox" x-model="c.enabled" @change="saveChannel(c)" /></td>
                   <td><input type="number" min="0" max="100" x-model.number="c.errorRate" @change="saveChannel(c)" /></td>
                   <td><input type="number" x-model.number="c.extraLatencyMs" @change="saveChannel(c)" /></td>
                   <td>
                     <div style="display:flex; align-items:center; gap:6px">
-                      <code x-text="origin + '/ch/' + c.id" style="white-space:nowrap"></code>
-                      <button class="sm" @click="copy(origin + '/ch/' + c.id)">Copy</button>
+                      <code x-text="channelUrl(c)" style="white-space:nowrap"></code>
+                      <button class="sm" @click="copy(channelUrl(c))">Copy</button>
                     </div>
                   </td>
                   <td><button class="sm danger" @click="delChannel(c.id)">Delete</button></td>
                 </tr>
               </template>
-              <tr x-show="!channels.length"><td colspan="6" style="color:var(--mut)">No channels</td></tr>
+              <tr x-show="!channels.length"><td colspan="7" style="color:var(--mut)">No channels</td></tr>
             </tbody>
           </table>
           <div class="btns" style="margin-top:10px"><button class="primary" @click="openNewChannelDialog()">+ New Channel</button></div>
-          <div class="hint">Enabled 关掉、或者 Error Rate 拉高，都会让这个渠道下的所有请求直接失败（不管打的是哪个模型），配合 Extra Latency 一起可以模拟"渠道变慢 / 不稳定 / 整个挂掉"。字段改完失焦即保存。</div>
+          <div class="hint">Enabled 关掉、或者 Error Rate 拉高，都会让这个渠道下的所有请求直接失败（不管打的是哪个模型），配合 Extra Latency 一起可以模拟"渠道变慢 / 不稳定 / 整个挂掉"。改端口立刻生效（换成新端口监听，不用重启服务）；两个渠道用同一个端口、或者跟主服务端口冲突，保存时会报错拦下来。字段改完失焦即保存。</div>
         </div>
       </template>
 
@@ -692,11 +779,32 @@
         <label>名称</label>
         <input x-model="newChannelState.name" placeholder="例如 备用渠道 2" @keydown.enter="confirmNewChannel()" />
       </div>
-      <div class="hint" style="margin-top:8px">ID 会出现在 Base URL 里（<code>/ch/&lt;id&gt;</code>），建议用英文/数字/短横线。</div>
+      <div class="hint" style="margin-top:8px">端口会自动分配一个没被占用的，建完之后可以在 Channels 表格里改成你想要的。</div>
     </div>
     <div class="confirm-actions">
       <button @click="newChannelState.open=false">Cancel</button>
       <button class="primary" @click="confirmNewChannel()">Create</button>
+    </div>
+  </div>
+</div>
+
+<div class="confirm-overlay" x-show="newConfigState.open" x-cloak @keydown.escape.window="newConfigState.open=false">
+  <div class="confirm-box" style="width:360px">
+    <div class="confirm-titlebar">New Configuration</div>
+    <div class="confirm-body">
+      <div class="row" style="grid-template-columns:64px 1fr; margin-bottom:0">
+        <label>ID</label>
+        <input x-ref="newConfigIdInput" x-model="newConfigState.id" placeholder="例如 on-backup" @keydown.enter="confirmNewConfig()" />
+      </div>
+      <div class="row" style="grid-template-columns:64px 1fr; margin-bottom:0; margin-top:9px">
+        <label>名称</label>
+        <input x-model="newConfigState.name" placeholder="例如 在 backup 渠道(慢)" @keydown.enter="confirmNewConfig()" />
+      </div>
+      <div class="hint" style="margin-top:8px">新配置默认用出厂值，不绑任何渠道；建完之后在下面表单里改字段、勾要绑的渠道，再点 Save Configuration。</div>
+    </div>
+    <div class="confirm-actions">
+      <button @click="newConfigState.open=false">Cancel</button>
+      <button class="primary" @click="confirmNewConfig()">Create</button>
     </div>
   </div>
 </div>
@@ -706,7 +814,7 @@ function app() {
   return {
     origin: location.origin,
     tab: "models",
-    models: [], presets: [], channels: [], recent: [], sel: null, toastMsg: "",
+    models: [], configurations: [], presets: [], channels: [], recent: [], sel: null, selConfig: null, toastMsg: "",
     editingPreset: "", presetForm: {},
     modelSearch: "", collapsedGroups: {},
     confirmState: { open:false, message:"", resolveFn:null },
@@ -769,6 +877,7 @@ function app() {
     newModelState: { open:false, vendor:"custom-openai", id:"" },
     saveAsPresetState: { open:false, name:"" },
     newChannelState: { open:false, id:"", name:"" },
+    newConfigState: { open:false, id:"", name:"" },
     auth: { passwordSet:false, authenticated:false, trustedByIp:true,
             lan:{mode:"allow-all",list:null}, public:{mode:"whitelist",list:null} },
     authForm: { password:"", lan:{mode:"allow-all",list:""}, public:{mode:"whitelist",list:""} },
@@ -826,8 +935,16 @@ function app() {
       const r = await fetch("/__state"); const s = await r.json();
       // enabled 在库里是 0/1(SQLite 没 boolean)，Alpine 的 checkbox x-model 要真布尔值才会显示勾上，这里转一下；
       // 存回去的时候 store.js 的 normalizeChannel 会把 true/false 自动转回 1/0，不用在 saveChannel 里特地转。
-      this.models = s.models; this.presets = s.presets; this.channels = (s.channels || []).map(c => ({ ...c, enabled: !!c.enabled })); this.port = s.port; this.lanIps = s.lanIps || [];
+      this.models = s.models; this.configurations = s.configurations || []; this.presets = s.presets;
+      this.channels = (s.channels || []).map(c => ({ ...c, enabled: !!c.enabled })); this.port = s.port; this.lanIps = s.lanIps || [];
       if (this.sel) { const still = this.models.find(m => m.id === this.sel.id); this.sel = still ? JSON.parse(JSON.stringify(still)) : (this.models[0] ? JSON.parse(JSON.stringify(this.models[0])) : null); }
+      if (this.sel) {
+        const configs = this.modelConfigs();
+        const stillConfig = this.selConfig && configs.find(c => c.id === this.selConfig.id);
+        this.selConfig = stillConfig ? JSON.parse(JSON.stringify(stillConfig)) : (configs[0] ? JSON.parse(JSON.stringify(configs[0])) : null);
+      } else {
+        this.selConfig = null;
+      }
     },
     async loadAuthStatus() {
       const r = await fetch("/__auth/status"); const s = await r.json();
@@ -835,28 +952,78 @@ function app() {
       this.authForm.lan = { mode: s.lan.mode, list: s.lan.list || "" };
       this.authForm.public = { mode: s.public.mode, list: s.public.list || "" };
     },
-    select(id) { const m = this.models.find(x => x.id === id); this.sel = m ? JSON.parse(JSON.stringify(m)) : null; },
+    select(id) {
+      const m = this.models.find(x => x.id === id);
+      this.sel = m ? JSON.parse(JSON.stringify(m)) : null;
+      const configs = this.modelConfigs();
+      this.selConfig = configs.length ? JSON.parse(JSON.stringify(configs[0])) : null;
+    },
+    modelConfigs() {
+      if (!this.sel) return [];
+      return this.configurations.filter(c => c.modelId === this.sel.id);
+    },
+    selectConfig(id) {
+      const c = this.modelConfigs().find(x => x.id === id);
+      this.selConfig = c ? JSON.parse(JSON.stringify(c)) : null;
+    },
     toast(msg, ok=true) { this.toastMsg = msg; setTimeout(() => this.toastMsg = "", 1600); },
     async saveModel() {
       const r = await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(this.sel) });
       if (r.ok) { const {model} = await r.json(); await this.loadState(); this.select(model.id); this.toast("已保存并生效"); }
       else this.toast("保存失败", false);
     },
-    openSaveAsPreset() {
+    async saveConfig() {
+      if (!this.selConfig) return;
+      const r = await fetch("/__configs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(this.selConfig) });
+      if (r.ok) { const {config} = await r.json(); await this.loadState(); this.selectConfig(config.id); this.toast("配置已保存并生效"); }
+      else this.toast("保存失败", false);
+    },
+    toggleConfigChannel(channelId, checked) {
+      if (!this.selConfig) return;
+      const set = new Set(this.selConfig.channelIds);
+      if (checked) set.add(channelId); else set.delete(channelId);
+      this.selConfig.channelIds = [...set];
+    },
+    openNewConfigDialog() {
       if (!this.sel) return;
+      this.newConfigState = { open:true, id:"", name:"" };
+      this.$nextTick(() => this.$refs.newConfigIdInput && this.$refs.newConfigIdInput.focus());
+    },
+    async confirmNewConfig() {
+      const id = this.newConfigState.id.trim();
+      if (!id) { this.toast("请输入配置 ID", false); return; }
+      const name = this.newConfigState.name.trim() || id;
+      await fetch("/__configs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id, modelId: this.sel.id, name }) });
+      this.newConfigState.open = false;
+      await this.loadState(); this.selectConfig(id); this.toast("已新建配置");
+    },
+    async delConfig() {
+      if (!this.selConfig) return;
+      if (this.modelConfigs().length <= 1) { this.toast("这是唯一一份配置，模型至少要留一份兜底，不能删", false); return; }
+      const ok = await this.askConfirm("Delete configuration \"" + this.selConfig.name + "\"? This cannot be undone.");
+      if (!ok) return;
+      await fetch("/__configs/" + encodeURIComponent(this.selConfig.id), { method:"DELETE" });
+      await this.loadState();
+      const remaining = this.modelConfigs();
+      if (remaining.length) this.selectConfig(remaining[0].id);
+      this.toast("已删除配置");
+    },
+    openSaveAsPreset() {
+      if (!this.selConfig) return;
       this.saveAsPresetState = { open:true, name:"" };
       this.$nextTick(() => this.$refs.saveAsPresetInput && this.$refs.saveAsPresetInput.focus());
     },
     async confirmSaveAsPreset() {
       const name = this.saveAsPresetState.name.trim();
       if (!name) { this.toast("请输入预设名称", false); return; }
-      // /__presets 只会从 patch 里挑行为字段(id/vendor/format/content 会被自动忽略)，整个 sel 丢过去就行
-      await fetch("/__presets", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name, patch: this.sel }) });
+      // /__presets 只会从 patch 里挑行为字段(id/modelId/name 会被自动忽略)，整个 selConfig 丢过去就行
+      await fetch("/__presets", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name, patch: this.selConfig }) });
       this.saveAsPresetState.open = false;
       await this.loadState(); this.toast("已存为预设「" + name + "」");
     },
     async saveChannel(c) {
-      await fetch("/__channels", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(c) });
+      const r = await fetch("/__channels", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(c) });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); this.toast(e.error || "保存失败", false); await this.loadState(); return; }
       await this.loadState();
     },
     async delChannel(id) {
@@ -873,7 +1040,8 @@ function app() {
       const id = this.newChannelState.id.trim();
       if (!id) { this.toast("请输入渠道 ID", false); return; }
       const name = this.newChannelState.name.trim() || id;
-      await fetch("/__channels", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id, name }) });
+      const r = await fetch("/__channels", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id, name }) });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); this.toast(e.error || "创建失败", false); return; }
       this.newChannelState.open = false;
       await this.loadState(); this.toast("已新建渠道");
     },
@@ -884,18 +1052,23 @@ function app() {
     async confirmNewModel() {
       const id = this.newModelState.id.trim();
       if (!id) { this.toast("请输入模型名称", false); return; }
-      const base = { id, vendor: this.newModelState.vendor, content:"mock 回复",
-        promptMode:"auto", promptTokens:100, completionTokens:30, cacheMode:"none", cacheRatio:0.5,
-        cachedTokens:0, cacheCreationTokens:0, latencyMs:0, chunkDelayMs:40, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
-      await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(base) });
+      await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id, vendor: this.newModelState.vendor }) });
+      await fetch("/__configs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id: id + "-default", modelId: id, name: "默认" }) });
       this.newModelState.open = false;
-      await this.loadState(); this.select(base.id); this.toast("已新建模型");
+      await this.loadState(); this.select(id); this.toast("已新建模型");
     },
     async dupModel() {
       if (!this.sel) return;
-      const copy = JSON.parse(JSON.stringify(this.sel)); copy.id = this.sel.id + "-copy";
-      await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(copy) });
-      await this.loadState(); this.select(copy.id); this.toast("已复制");
+      const newId = this.sel.id + "-copy";
+      await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id: newId, vendor: this.sel.vendor }) });
+      const configs = this.modelConfigs();
+      for (let i = 0; i < configs.length; i++) {
+        const copy = JSON.parse(JSON.stringify(configs[i]));
+        copy.id = newId + "-cfg" + i;
+        copy.modelId = newId;
+        await fetch("/__configs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(copy) });
+      }
+      await this.loadState(); this.select(newId); this.toast("已复制");
     },
     async delModel() {
       if (!this.sel) return;
@@ -905,10 +1078,10 @@ function app() {
       this.sel = null; await this.loadState(); if (this.models.length) this.select(this.models[0].id); this.toast("已删除");
     },
     async applyPreset(name) {
-      if (!this.sel) return;
-      await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(this.sel) });
-      const r = await fetch("/__models/" + encodeURIComponent(this.sel.id) + "/apply-preset", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name }) });
-      if (r.ok) { const {model} = await r.json(); await this.loadState(); this.select(model.id); this.toast("已套用预设「" + name + "」"); }
+      if (!this.selConfig) return;
+      await fetch("/__configs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(this.selConfig) });
+      const r = await fetch("/__configs/" + encodeURIComponent(this.selConfig.id) + "/apply-preset", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name }) });
+      if (r.ok) { const {config} = await r.json(); await this.loadState(); this.selectConfig(config.id); this.toast("已套用预设「" + name + "」"); }
       else this.toast("套用失败", false);
     },
     async pollStats() { const r = await fetch("/__stats"); this.recent = (await r.json()).recent; },
@@ -940,6 +1113,8 @@ function app() {
       return "POST " + base + "/v1beta/models/" + this.sel.id + ":generateContent";
     },
     copy(t) { navigator.clipboard?.writeText(t); this.toast("已复制"); },
+    // 渠道走独立端口(不是路径前缀)，跟主服务结构完全一样——只换端口号，host/协议照抄当前访问方式。
+    channelUrl(c) { return location.protocol + "//" + location.hostname + ":" + c.port; },
     async savePassword() {
       if (!this.authForm.password) { this.toast("请输入新密码", false); return; }
       const r = await fetch("/__auth/config", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ password: this.authForm.password }) });

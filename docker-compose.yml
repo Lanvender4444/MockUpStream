@@ -7,6 +7,9 @@
 # 渠道 Base URL：
 #   - new-api 也在容器里 -> http://host.docker.internal:8788
 #   - 并入 new-api 的 compose 网络 -> http://mock-upstream:8788（服务名）
+#
+# 多渠道模拟(Channels)：每个渠道是独立端口，Docker 下必须显式映射端口才能从容器外连到，
+# 下面按种子渠道默认的 8789-8791 映射了三个；自己在控制台建了新渠道/改了端口，记得同步加一行。
 
 services:
   mock-upstream:
@@ -21,3 +24,6 @@ services:
       - MOCK_PORT=8788
     ports:
       - "8788:8788"
+      - "8789:8789"            # 渠道: primary
+      - "8790:8790"            # 渠道: backup
+      - "8791:8791"            # 渠道: flaky

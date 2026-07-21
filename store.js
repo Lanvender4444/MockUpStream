@@ -1,17 +1,39 @@
 // store.js —— SQLite 持久化（bun:sqlite，无需额外依赖）。
 // 对外 API 与旧 JSON 版一致，server.js 无需改动。
-// 表:  models(固定列)  /  presets(name + patch JSON)
+// 表: models(身份) / configurations(行为快照, 挂在某个 model 下) / configuration_channels(多对多) /
+//     presets(name + patch JSON) / channels
 
 import { Database } from "bun:sqlite";
 import { BUILTIN_PRESETS } from "./presets.js";
 
 const DB_PATH = import.meta.dir + "/mock.db";
 
-// 模型行为字段默认值(新建/兜底用)
+// 模型只是身份(渠道调度测试的耦合点在 Configuration 上, 不在这里)。
 export const MODEL_DEFAULTS = {
   id: "default",
-  format: "openai",
   vendor: "custom-openai",
+  format: "openai",
+};
+
+// 厂商 -> 协议格式。厂商是给人看的身份，协议格式是技术上走哪个 endpoint，两者自动关联，
+// 选厂商时不需要用户再单独选协议(openai 兼容的一大堆厂商都自动落到 openai 协议)。
+export const VENDOR_FORMAT_MAP = {
+  openai: "openai", claude: "claude", gemini: "gemini",
+  deepseek: "openai", kimi: "openai", glm: "openai", qwen: "openai",
+  hunyuan: "openai", mistral: "openai", grok: "openai", llama: "openai",
+  minimax: "openai", ernie: "openai", mimo: "openai",
+  "custom-openai": "openai", "custom-gemini": "gemini", "custom-claude": "claude",
+};
+
+const COLS = Object.keys(MODEL_DEFAULTS); // 列顺序 = 字段顺序
+
+// Configuration = 一个模型底下的一份完整"行为快照"(回复内容/token/缓存/延迟/错误注入)。
+// 一个模型可以有多个 Configuration，每个可以绑定一个或多个渠道(configuration_channels)；
+// 请求进来按 (modelId, channelId) 找对应的 Configuration，找不到专属的就退回该模型 ord 最小的那个(默认)。
+export const CONFIG_DEFAULTS = {
+  id: "default",
+  modelId: "",
+  name: "默认",
   content: "这是来自 mock 上游的假回复，用于测试 new-api 全链路计费与日志。",
   promptMode: "auto",
   promptTokens: 100,
@@ -30,41 +52,34 @@ export const MODEL_DEFAULTS = {
   errorRate: 0,
   errorMessage: "mock injected error",
 };
+const CONFIG_COLS = Object.keys(CONFIG_DEFAULTS);
 
-// 厂商 -> 协议格式。厂商是给人看的身份，协议格式是技术上走哪个 endpoint，两者自动关联，
-// 选厂商时不需要用户再单独选协议(openai 兼容的一大堆厂商都自动落到 openai 协议)。
-export const VENDOR_FORMAT_MAP = {
-  openai: "openai", claude: "claude", gemini: "gemini",
-  deepseek: "openai", kimi: "openai", glm: "openai", qwen: "openai",
-  hunyuan: "openai", mistral: "openai", grok: "openai", llama: "openai",
-  minimax: "openai", ernie: "openai", mimo: "openai",
-  "custom-openai": "openai", "custom-gemini": "gemini", "custom-claude": "claude",
-};
-
-const COLS = Object.keys(MODEL_DEFAULTS); // 列顺序 = 字段顺序
-
-// 渠道行为字段默认值(新建/兜底用)。渠道跟模型解耦——任何渠道都能打任何已配置的模型，
-// 渠道只管"这条链路本身通不通、稳不稳、快不快"，不管模型返回的具体内容。
+// 渠道行为字段默认值(新建/兜底用)。渠道管"这条链路本身通不通/稳不稳/快不快"，
+// 跟 Configuration 决定"返回什么内容"是两个独立维度，可以叠加。
 export const CHANNEL_DEFAULTS = {
   id: "default",
   name: "渠道",
+  // 每个渠道一个独立端口(不用路径前缀)：很多 OpenAI 兼容客户端拼 Base URL 时会用"前导斜杠"的相对路径解析
+  // (new URL("/v1/...", base))，这种写法会把 base 自带的路径整段吃掉退回裸 host:port——用独立端口就没有
+  // 路径可丢，跟主端口结构完全一样，对任何客户端都零风险。没显式指定就自动分配(见 writeChannel)。
+  port: 8789,
   enabled: 1,             // 0/1(SQLite 没有 boolean); 0 时该渠道下所有请求直接返回渠道级错误，模拟"渠道挂了"
-  errorRate: 0,           // 0-100，独立于模型自己的 errorRate，模拟"渠道不稳定，偶发失败"
+  errorRate: 0,           // 0-100，独立于 Configuration 自己的 errorRate，模拟"渠道不稳定，偶发失败"
   errorStatus: 503,
   errorMessage: "channel unavailable (mock)",
-  extraLatencyMs: 0,      // 叠加在模型自身延迟之上，模拟"这个渠道网络更慢"
+  extraLatencyMs: 0,      // 叠加在 Configuration 自身延迟之上，模拟"这个渠道网络更慢"
 };
 const CHANNEL_COLS = Object.keys(CHANNEL_DEFAULTS);
 
-// 预设只承载"行为字段"(不含 id/format/vendor/content)，套用时覆盖模型对应字段。
-export const PRESET_FIELDS = COLS.filter((c) => !["id", "format", "vendor", "content"].includes(c));
+// 预设只承载"行为字段"(不含 id/modelId/name)，套用时覆盖 Configuration 对应字段。
+export const PRESET_FIELDS = CONFIG_COLS.filter((c) => !["id", "modelId", "name"].includes(c));
 
 // 规范化预设 patch: 只保留 PRESET_FIELDS + 数字字段转 number
 function normalizePatch(patch = {}) {
   const out = {};
   for (const k of PRESET_FIELDS) {
     if (patch[k] === undefined) continue;
-    out[k] = typeof MODEL_DEFAULTS[k] === "number" ? Number(patch[k]) || 0 : patch[k];
+    out[k] = typeof CONFIG_DEFAULTS[k] === "number" ? Number(patch[k]) || 0 : patch[k];
   }
   return out;
 }
@@ -82,11 +97,26 @@ const DEFAULT_MODELS = [
   { ...MODEL_DEFAULTS, id: "claude-opus-4-8", format: "claude", vendor: "claude" },
 ];
 
+// 每个模型至少一个默认 Configuration(不绑渠道 = 兜底)。给 grok-4.5 额外加两个绑定具体渠道的示例，
+// 开箱即可演示"同一模型在不同渠道下表现不同"这个核心场景，不用自己现建。
+const DEFAULT_CONFIGS = [
+  { id: "grok-4.5-default", modelId: "grok-4.5", name: "默认" },
+  { id: "grok-4.5-on-backup", modelId: "grok-4.5", name: "在 backup 渠道(慢)", latencyMs: 800, channelIds: ["backup"] },
+  { id: "grok-4.5-on-flaky", modelId: "grok-4.5", name: "在 flaky 渠道(偶发故障)", errorStatus: 503, errorRate: 30, errorMessage: "mock channel error (simulated instability)", channelIds: ["flaky"] },
+  { id: "deepseek-v4-flash-default", modelId: "deepseek-v4-flash", name: "默认" },
+  { id: "qwen3-max-default", modelId: "qwen3-max", name: "默认" },
+  { id: "kimi-k2-default", modelId: "kimi-k2", name: "默认" },
+  { id: "glm-4.6-default", modelId: "glm-4.6", name: "默认" },
+  { id: "mimo-v2.5-default", modelId: "mimo-v2.5", name: "默认" },
+  { id: "gemini-2.5-pro-default", modelId: "gemini-2.5-pro", name: "默认" },
+  { id: "claude-opus-4-8-default", modelId: "claude-opus-4-8", name: "默认" },
+];
+
 // 3 个示例渠道，直接演示典型的多渠道测试场景(权重/失败转移/限流降级)。
 const DEFAULT_CHANNELS = [
-  { ...CHANNEL_DEFAULTS, id: "primary", name: "主渠道" },
-  { ...CHANNEL_DEFAULTS, id: "backup", name: "备用渠道(模拟慢)", extraLatencyMs: 800 },
-  { ...CHANNEL_DEFAULTS, id: "flaky", name: "不稳定渠道(模拟偶发故障)", errorRate: 30, errorMessage: "mock channel error (simulated instability)" },
+  { ...CHANNEL_DEFAULTS, id: "primary", name: "主渠道", port: 8789 },
+  { ...CHANNEL_DEFAULTS, id: "backup", name: "备用渠道(模拟慢)", port: 8790 },
+  { ...CHANNEL_DEFAULTS, id: "flaky", name: "不稳定渠道(模拟偶发故障)", port: 8791 },
 ];
 
 let db;
@@ -95,9 +125,7 @@ let db;
 function normalizeModel(m) {
   const out = { ...MODEL_DEFAULTS, ...m };
   for (const k of COLS) {
-    // 老库刚 ALTER 加的列, 已有行读出来是 SQL NULL(不是"字段不存在"), 上面那行 spread 接不住, 这里兜一次
     if (out[k] == null) out[k] = MODEL_DEFAULTS[k];
-    if (typeof MODEL_DEFAULTS[k] === "number") out[k] = Number(out[k]) || 0;
   }
   out.id = String(out.id || "").trim() || "unnamed";
   if (!VENDOR_FORMAT_MAP[out.vendor]) out.vendor = "custom-openai";
@@ -106,7 +134,24 @@ function normalizeModel(m) {
 }
 
 function colSqlType(c) {
-  if (typeof MODEL_DEFAULTS[c] !== "number") return "TEXT";
+  return typeof MODEL_DEFAULTS[c] === "number" ? "INTEGER" : "TEXT";
+}
+
+// 规范化 Configuration: 补全缺省 + 数字字段转 number + id/modelId/name 兜底。
+function normalizeConfig(c) {
+  const out = { ...CONFIG_DEFAULTS, ...c };
+  for (const k of CONFIG_COLS) {
+    if (out[k] == null) out[k] = CONFIG_DEFAULTS[k];
+    if (typeof CONFIG_DEFAULTS[k] === "number") out[k] = Number(out[k]) || 0;
+  }
+  out.id = String(out.id || "").trim() || "unnamed";
+  out.modelId = String(out.modelId || "").trim();
+  out.name = String(out.name || "").trim() || out.id;
+  return out;
+}
+
+function configColSqlType(c) {
+  if (typeof CONFIG_DEFAULTS[c] !== "number") return "TEXT";
   return c === "cacheRatio" ? "REAL" : "INTEGER";
 }
 
@@ -131,21 +176,14 @@ function initSchema() {
   db.run(`CREATE TABLE IF NOT EXISTS presets (name TEXT PRIMARY KEY, patch TEXT, ord INTEGER)`);
   const channelColDefs = CHANNEL_COLS.map((c) => (c === "id" ? "id TEXT PRIMARY KEY" : `${c} ${channelColSqlType(c)}`)).join(", ");
   db.run(`CREATE TABLE IF NOT EXISTS channels (${channelColDefs}, ord INTEGER)`);
-}
-
-// 老库缺新增字段的列(比如这次新增的延迟范围/分布字段): 通用地补齐 COLS 里所有还没有的列，
-// 不用每加一个新字段都单独写一个迁移函数。已有列不动，不影响用户已有数据；新列读出来是 NULL，
-// 靠 normalizeModel() 里的兜底补回默认值。vendor 列有自己的迁移(还要顺带猜值)，放在这个之前跑。
-function migrateModelColumns() {
-  const existing = new Set(db.query("PRAGMA table_info(models)").all().map((c) => c.name));
-  for (const col of COLS) {
-    if (col === "id" || existing.has(col)) continue;
-    db.run(`ALTER TABLE models ADD COLUMN ${col} ${colSqlType(col)}`);
-  }
+  const configColDefs = CONFIG_COLS.map((c) => (c === "id" ? "id TEXT PRIMARY KEY" : `${c} ${configColSqlType(c)}`)).join(", ");
+  db.run(`CREATE TABLE IF NOT EXISTS configurations (${configColDefs}, ord INTEGER)`);
+  db.run(`CREATE TABLE IF NOT EXISTS configuration_channels (configId TEXT, channelId TEXT, PRIMARY KEY(configId, channelId))`);
 }
 
 // 老库没有 vendor 列(厂商分类是后加的字段): 补列 + 按 id 关键字猜一次厂商，猜不出来的按原 format 落到对应的
 // "自定义"分类。只在 vendor 列刚补上时迁移一次(用 PRAGMA 判断)，不会覆盖用户后续在新分类里的修改。
+// 要在 migrateToConfigurations() 之前跑——那一步要从这张表(还是老的宽表结构)里把 vendor 一起搬走。
 const VENDOR_GUESS_KEYWORDS = { gpt: "openai", ...Object.fromEntries(Object.keys(VENDOR_FORMAT_MAP).map((v) => [v, v])) };
 function guessVendorFromId(id, fallbackFormat) {
   const lower = String(id || "").toLowerCase();
@@ -161,6 +199,44 @@ function migrateVendorColumn() {
   const rows = db.query("SELECT id, format FROM models").all();
   for (const row of rows) {
     db.run("UPDATE models SET vendor = ? WHERE id = ?", [guessVendorFromId(row.id, row.format || "openai"), row.id]);
+  }
+}
+
+// 老库(升级前)的 models 表还是"模型+行为字段"混一起的宽表。检测到还有 content 列，就把每行的行为
+// 字段整体搬成一个不绑渠道的默认 Configuration(= 兜底，任何渠道找不到专属配置都会退到它)，一个值都不丢；
+// 然后把 models 表重建成瘦身版(只留 id/vendor/format/ord)。只在检测到宽表时跑一次。
+function migrateToConfigurations() {
+  const cols = db.query("PRAGMA table_info(models)").all().map((c) => c.name);
+  if (!cols.includes("content")) return; // 已经是瘦身版
+
+  const oldRows = db.query("SELECT * FROM models").all();
+  db.run("ALTER TABLE models RENAME TO models_old_wide");
+  db.run("CREATE TABLE models (id TEXT PRIMARY KEY, vendor TEXT, format TEXT, ord INTEGER)");
+  for (const row of oldRows) {
+    db.run("INSERT INTO models (id, vendor, format, ord) VALUES (?, ?, ?, ?)", [row.id, row.vendor, row.format, row.ord]);
+    const patch = {};
+    for (const k of PRESET_FIELDS) if (row[k] !== undefined) patch[k] = row[k];
+    writeConfig({ id: `${row.id}-default`, modelId: row.id, name: "默认", ...patch });
+  }
+  db.run("DROP TABLE models_old_wide");
+}
+
+// 老库的 channels 表是上一版加的，没有 port 列(那时候渠道走 /ch/<id> 路径前缀，不是独立端口)。
+// 补列后给每个已有渠道挨个分配一个不冲突的端口(8789 起，按 ord 顺序)，不会让它们全撞在默认值上。
+function migrateChannelColumns() {
+  const existing = new Set(db.query("PRAGMA table_info(channels)").all().map((c) => c.name));
+  const hadPort = existing.has("port");
+  for (const col of CHANNEL_COLS) {
+    if (col === "id" || existing.has(col)) continue;
+    db.run(`ALTER TABLE channels ADD COLUMN ${col} ${channelColSqlType(col)}`);
+  }
+  if (!hadPort) {
+    const rows = db.query("SELECT id FROM channels ORDER BY ord, rowid").all();
+    let nextPort = 8789;
+    for (const row of rows) {
+      db.run("UPDATE channels SET port = ? WHERE id = ?", [nextPort, row.id]);
+      nextPort++;
+    }
   }
 }
 
@@ -198,14 +274,20 @@ function migrateLegacyTrustColumns() {
 }
 
 function seedIfEmpty() {
+  // 渠道先种(models 下面的示例 Configuration 会引用渠道 id)
+  const nChannels = db.query("SELECT COUNT(*) c FROM channels").get().c;
+  if (nChannels === 0) DEFAULT_CHANNELS.forEach((c, i) => writeChannel(c, i));
+
   const nModels = db.query("SELECT COUNT(*) c FROM models").get().c;
-  if (nModels === 0) DEFAULT_MODELS.forEach((m, i) => writeModel(m, i));
+  if (nModels === 0) {
+    DEFAULT_MODELS.forEach((m, i) => writeModel(m, i));
+    DEFAULT_CONFIGS.forEach((c) => writeConfig(c)); // ord 按 modelId 各自从 0 自增, 不用手动传
+  }
+
   const nPresets = db.query("SELECT COUNT(*) c FROM presets").get().c;
   if (nPresets === 0)
     BUILTIN_PRESETS.forEach((p, i) =>
       db.run("INSERT INTO presets (name, patch, ord) VALUES (?, ?, ?)", [p.name, JSON.stringify(normalizePatch(p.patch)), i]));
-  const nChannels = db.query("SELECT COUNT(*) c FROM channels").get().c;
-  if (nChannels === 0) DEFAULT_CHANNELS.forEach((c, i) => writeChannel(c, i));
 }
 
 // upsert 一个模型(带排序号)
@@ -227,6 +309,16 @@ function writeModel(m, ord) {
 // upsert 一个渠道(带排序号)，写法照抄 writeModel
 function writeChannel(c, ord) {
   const channel = normalizeChannel(c);
+
+  // 没显式给端口: 自动分配一个没被占用的(现有渠道端口最大值+1, 起步 8789)。
+  if (c.port == null) {
+    const row = db.query("SELECT COALESCE(MAX(port), 8788) n FROM channels WHERE id != ?").get(channel.id);
+    channel.port = Math.max(row.n + 1, 8789);
+  } else {
+    const conflict = db.query("SELECT id FROM channels WHERE port = ? AND id != ?").get(channel.port, channel.id);
+    if (conflict) throw new Error(`端口 ${channel.port} 已经被渠道「${conflict.id}」占用了，换一个`);
+  }
+
   const placeholders = CHANNEL_COLS.map(() => "?").join(", ");
   const updates = CHANNEL_COLS.filter((k) => k !== "id").map((k) => `${k}=excluded.${k}`).join(", ");
   const vals = CHANNEL_COLS.map((k) => channel[k]);
@@ -237,6 +329,28 @@ function writeChannel(c, ord) {
     [...vals, useOrd]
   );
   return channel;
+}
+
+// upsert 一个 Configuration(带排序号，缺省时按所属模型各自从 0 自增)。
+// channelIds(如果传了数组)驱动 configuration_channels 联表: 全量替换(先删后插)，简单可靠。
+function writeConfig(c, ord) {
+  const config = normalizeConfig(c);
+  const placeholders = CONFIG_COLS.map(() => "?").join(", ");
+  const updates = CONFIG_COLS.filter((k) => k !== "id").map((k) => `${k}=excluded.${k}`).join(", ");
+  const vals = CONFIG_COLS.map((k) => config[k]);
+  const useOrd = ord ?? (db.query("SELECT COALESCE(MAX(ord),-1)+1 n FROM configurations WHERE modelId = ?").get(config.modelId).n || 0);
+  db.run(
+    `INSERT INTO configurations (${CONFIG_COLS.join(",")}, ord) VALUES (${placeholders}, ?)
+     ON CONFLICT(id) DO UPDATE SET ${updates}`,
+    [...vals, useOrd]
+  );
+  if (Array.isArray(c.channelIds)) {
+    db.run("DELETE FROM configuration_channels WHERE configId = ?", [config.id]);
+    for (const chId of c.channelIds) {
+      db.run("INSERT OR IGNORE INTO configuration_channels (configId, channelId) VALUES (?, ?)", [config.id, chId]);
+    }
+  }
+  return getConfig(config.id);
 }
 
 function nextOrd() {
@@ -253,6 +367,13 @@ function rowToChannel(row) {
   return normalizeChannel(rest);
 }
 
+function rowToConfig(row) {
+  const { ord, ...rest } = row;
+  const config = normalizeConfig(rest);
+  config.channelIds = db.query("SELECT channelId FROM configuration_channels WHERE configId = ? ORDER BY channelId").all(config.id).map((r) => r.channelId);
+  return config;
+}
+
 // ---------- 对外 API（与旧版一致）----------
 
 export async function load(dbPath) {
@@ -262,18 +383,25 @@ export async function load(dbPath) {
   db.run("PRAGMA synchronous = FULL");
   initSchema();
   migrateVendorColumn();
-  migrateModelColumns();
+  migrateToConfigurations();
+  migrateChannelColumns();
   initAuthSchema();
   seedIfEmpty();
   return getState();
 }
 
+// 主要给测试用: 关掉当前连接(比如迁移测试要在临时文件上验证完就删掉, Windows 下文件被占着删不掉)。
+export function close() {
+  if (db) db.close();
+}
+
 export function getState() {
   const models = db.query("SELECT * FROM models ORDER BY ord, rowid").all().map(rowToModel);
+  const configurations = db.query("SELECT * FROM configurations ORDER BY modelId, ord, rowid").all().map(rowToConfig);
   const presets = db.query("SELECT name, patch FROM presets ORDER BY ord, rowid").all()
     .map((r) => ({ name: r.name, patch: JSON.parse(r.patch) }));
   const channels = db.query("SELECT * FROM channels ORDER BY ord, rowid").all().map(rowToChannel);
-  return { models, presets, channels };
+  return { models, configurations, presets, channels };
 }
 
 export function getModel(id) {
@@ -281,9 +409,29 @@ export function getModel(id) {
   return row ? rowToModel(row) : null;
 }
 
-// 兜底: 找不到模型时返回默认(format 按 endpoint 传入)
-export function resolveModel(id, fallbackFormat = "openai") {
-  return getModel(id) || { ...MODEL_DEFAULTS, id: id || "default", format: fallbackFormat };
+export function getConfigsForModel(modelId) {
+  return db.query("SELECT * FROM configurations WHERE modelId = ? ORDER BY ord, rowid").all(modelId).map(rowToConfig);
+}
+
+export function getConfig(id) {
+  const row = db.query("SELECT * FROM configurations WHERE id = ?").get(id);
+  return row ? rowToConfig(row) : null;
+}
+
+// 核心解析: 按 (modelId, channelId) 找该模型在这个渠道下该用哪份 Configuration。
+//   有专属绑定 channelId 的 Configuration -> 用它
+//   没有(渠道没配过/没传 channelId，包括不走 /ch/ 前缀的直连请求) -> 退回该模型 ord 最小的那个(默认)
+//   模型本身都查无 -> 兜底成 MODEL_DEFAULTS+CONFIG_DEFAULTS(跟旧版查无模型时的行为等价)
+export function resolveModel(id, fallbackFormat = "openai", channelId = null) {
+  const model = getModel(id);
+  if (!model) {
+    return { ...MODEL_DEFAULTS, ...CONFIG_DEFAULTS, id: id || "default", format: fallbackFormat, modelId: id || "default" };
+  }
+  const configs = getConfigsForModel(model.id);
+  let config = channelId ? configs.find((c) => c.channelIds.includes(channelId)) : null;
+  if (!config) config = configs[0];
+  if (!config) config = { ...CONFIG_DEFAULTS, modelId: model.id };
+  return { ...CONFIG_DEFAULTS, ...config, ...model };
 }
 
 export async function upsertModel(m) {
@@ -291,7 +439,19 @@ export async function upsertModel(m) {
 }
 
 export async function deleteModel(id) {
+  const configs = getConfigsForModel(id);
+  for (const c of configs) db.run("DELETE FROM configuration_channels WHERE configId = ?", [c.id]);
+  db.run("DELETE FROM configurations WHERE modelId = ?", [id]);
   db.run("DELETE FROM models WHERE id = ?", [id]);
+}
+
+export async function upsertConfig(c) {
+  return writeConfig(c);
+}
+
+export async function deleteConfig(id) {
+  db.run("DELETE FROM configuration_channels WHERE configId = ?", [id]);
+  db.run("DELETE FROM configurations WHERE id = ?", [id]);
 }
 
 export function getChannel(id) {
@@ -304,15 +464,17 @@ export async function upsertChannel(c) {
 }
 
 export async function deleteChannel(id) {
+  db.run("DELETE FROM configuration_channels WHERE channelId = ?", [id]);
   db.run("DELETE FROM channels WHERE id = ?", [id]);
 }
 
-export async function applyPreset(id, presetName) {
-  const model = getModel(id);
+// 套用预设到某个 Configuration(不是模型)。保留原 ord 和原有的 channelIds 绑定(预设只改行为字段)。
+export async function applyPreset(configId, presetName) {
+  const config = getConfig(configId);
   const prow = db.query("SELECT patch FROM presets WHERE name = ?").get(presetName);
-  if (!model || !prow) return null;
-  const merged = { ...model, ...normalizePatch(JSON.parse(prow.patch)) };
-  return writeModel(merged); // 保留原 ord(ON CONFLICT 不动 ord)
+  if (!config || !prow) return null;
+  const merged = { ...config, ...normalizePatch(JSON.parse(prow.patch)) };
+  return writeConfig(merged);
 }
 
 // 新增/编辑预设。patch 为对象；只保留行为字段。
@@ -335,6 +497,8 @@ export async function deletePreset(name) {
 
 export async function reset() {
   db.run("DELETE FROM models");
+  db.run("DELETE FROM configurations");
+  db.run("DELETE FROM configuration_channels");
   db.run("DELETE FROM presets");
   db.run("DELETE FROM channels");
   seedIfEmpty();

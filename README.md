@@ -323,7 +323,8 @@ bun run cli delete-preset 我的预设
 
 渠道也有对应命令：
 ```bash
-bun run cli add-channel backup-2 --name="备用渠道 2" --extraLatencyMs=800   # 新建/更新渠道
+bun run cli add-channel backup-2 --name="备用渠道 2" --extraLatencyMs=800   # 新建/更新渠道，不填 --port 自动分配
+bun run cli add-channel custom-3 --port=9001                            # 指定端口(跟别的渠道冲突会报错)
 bun run cli add-channel flaky-2 --errorRate=30                          # 偶发故障
 bun run cli add-channel down-2 --enabled=false                          # 模拟这个渠道整个挂了
 bun run cli list-channels
@@ -334,22 +335,28 @@ bun run cli delete-channel backup-2
 
 ## 多渠道模拟（Channels）
 
-现在这个 mock 只有一个 Base URL，new-api 里配多个渠道时全都只能指向这一个地址，没法测"某个渠道挂了/限流/变慢，new-api 该转移到别的渠道"这类跨渠道逻辑（权重、失败转移、限流降级）。控制台的 **Channels** 标签页可以建任意多个渠道，每个都有自己的 Base URL：
+现在这个 mock 只有一个 Base URL，new-api 里配多个渠道时全都只能指向这一个地址，没法测"某个渠道挂了/限流/变慢，new-api 该转移到别的渠道"这类跨渠道逻辑（权重、失败转移、限流降级）。控制台的 **Channels** 标签页可以建任意多个渠道，每个都是**独立端口**（不是路径前缀）：
 
 ```
-http://localhost:8788/ch/<channelId>
+http://localhost:8790   # 比如 backup 渠道
 ```
 
-不加 `/ch/` 前缀的原有请求路径（`http://localhost:8788` 直接打）完全不受影响，行为跟以前一模一样——渠道功能是纯新增的，不用也不影响任何现有用法。
+之所以用独立端口而不是 `/ch/<id>` 这种路径前缀：很多 OpenAI 兼容客户端（包括不少 new-api 的分支）拼 Base URL 时用的是"前导斜杠"相对路径解析（类似 `new URL("/v1/chat/completions", baseURL)`），这种写法会把 baseURL 自带的路径整段吃掉、退回裸的 `host:port`——实测确实会导致请求打到官方默认端点而不是这个 mock。独立端口跟主服务结构完全一样，没有路径可丢，对任何客户端都零风险。
+
+渠道的端口可以在 Channels 表格里直接改，**改完立刻生效**（换成新端口监听，不用重启进程）；两个渠道用同一个端口、或者跟主服务端口冲突，保存时会报错拦下来，不会静默失败。新建渠道不填端口会自动分配一个没被占用的。
+
+不走渠道端口、直接打主服务（`http://localhost:8788`）的原有请求路径完全不受影响，行为跟以前一模一样——渠道功能是纯新增的，不用也不影响任何现有用法。
 
 每个渠道能单独控制：
 - **Enabled**：关掉后，这个渠道下所有请求（不管打哪个模型）直接返回渠道级错误，模拟"渠道挂了"。
 - **Error Rate %**：独立于模型自己的错误注入，按概率让请求失败，模拟"渠道不稳定，偶发故障"。
 - **Extra Latency ms**：叠加在模型自身延迟之上，模拟"这个渠道网络更慢"。
 
-首次建库会自动种 3 个示例渠道，直接对应典型的多渠道测试场景：`primary`（主渠道，正常）、`backup`（备用渠道，多 800ms 延迟）、`flaky`（不稳定渠道，30% 错误率）。在 new-api 里把这三个 Base URL 配成同一组的不同渠道（设权重/优先级），就能测权重分流、主渠道故障时是否正确转移到备用渠道、遇到 flaky 渠道时重试逻辑对不对。
+首次建库会自动种 3 个示例渠道（端口 8789/8790/8791）：`primary`（主渠道，正常）、`backup`（备用渠道）、`flaky`（不稳定渠道）。同时 `grok-4.5` 这个模型预置了 3 份 **Configuration**（模型下面可以建多份"行为快照"，每份可以绑一个或多个渠道）：不绑渠道的默认那份、绑 `backup` 且延迟 800ms 的那份、绑 `flaky` 且 30% 报错的那份——同一个模型在不同渠道下表现不一样，才是真实的多渠道调度测试场景。在 new-api 里把这三个 Base URL 配成同一组的不同渠道（设权重/优先级），就能测权重分流、主渠道故障时是否正确转移到备用渠道、遇到 flaky 渠道时重试逻辑对不对。
 
-「Recent Requests」表格的 Channel 列会标出每次请求实际走的是哪个渠道（没加前缀的直连请求显示 `—`），方便核对测试结果。
+「Recent Requests」表格的 Channel 列会标出每次请求实际走的是哪个渠道（直连主服务的请求显示 `—`），方便核对测试结果。
+
+> **公网/局域网/Docker 场景**：渠道端口跟主端口是平级的独立监听，防火墙/端口转发/Docker 端口映射都要把用到的渠道端口一并开出去，只开主端口的话渠道那几个端口连不通。
 
 ---
 
