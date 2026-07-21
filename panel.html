@@ -72,6 +72,11 @@
   textarea { resize:vertical; min-height:50px; }
   input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
   ::placeholder { color:var(--mut); }
+  /* 原生 number 上下调节按钮跟着系统/浏览器主题走颜色，在这套深色 UI 里经常显得很突兀(比如粉色)，直接去掉，
+     跟其余控件保持同一套自绘风格；输入数字/方向键/滚轮改值照常可用，只是没有那两个小箭头了。 */
+  input[type="number"] { -moz-appearance: textfield; }
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   .row { display:grid; grid-template-columns:150px 1fr; gap:10px; align-items:center; margin-bottom:9px; }
   .row label { color:var(--mut); font-size:12px; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
@@ -224,6 +229,7 @@
       <button :class="{active: tab==='tutorial'}" @click="tab='tutorial'">Tutorial</button>
       <button :class="{active: tab==='models'}" @click="tab='models'">Models</button>
       <button :class="{active: tab==='presets'}" @click="tab='presets'">Presets</button>
+      <button :class="{active: tab==='channels'}" @click="tab='channels'">Channels</button>
       <button :class="{active: tab==='recent'}" @click="tab='recent'">Recent Requests</button>
       <button :class="{active: tab==='network'}" @click="tab='network'">Network &amp; Security</button>
     </div>
@@ -235,6 +241,7 @@
 
       <!-- ===== tutorial ===== -->
       <template x-if="tab==='tutorial'">
+        <div>
         <div class="card">
           <h2>New-API 界面配置教程</h2>
           <div class="card-sub">在 new-api 的浏览器管理后台里，按顺序做完这 5 步，就能把这个 mock 当真实上游用。</div>
@@ -288,6 +295,36 @@
             </div>
           </div>
         </div>
+
+        <div class="card">
+          <h2>直接发请求（不经过 new-api）</h2>
+          <div class="card-sub">跳过 new-api，直接拿 curl 打这个 mock 自己，调试模型配置最快。</div>
+          <div class="hint" style="margin-top:0">
+            <code>Authorization: Bearer sk-xxx</code> 里的 <code>sk-xxx</code> 这个 mock <b>完全不校验</b>——随便填一个字符串（比如 <code>sk-mock</code>），甚至不带这个头也一样能打通。
+            这一层"鉴权"是 new-api 自己做的，跟直接打 mock 没关系；mock 只负责按你在 Models 标签页配的档案伪造响应。
+          </div>
+          <div class="tutorial-step-title" style="margin-top:14px">Bash / macOS / Linux</div>
+          <pre class="tutorial-code">curl http://localhost:8788/v1/chat/completions \
+  -H "Authorization: Bearer sk-mock" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"测试"}]}'</pre>
+          <div class="tutorial-step-title" style="margin-top:14px">PowerShell</div>
+          <div class="hint" style="margin-top:0">
+            PowerShell 里 <code>curl</code> 默认是 <code>Invoke-WebRequest</code> 的别名，<code>-H</code> 参数语法跟真 curl 不一样，直接抄 Bash 那份命令会报参数绑定错误。两种解法：
+          </div>
+          <pre class="tutorial-code">curl.exe http://localhost:8788/v1/chat/completions `
+  -H "Authorization: Bearer sk-mock" `
+  -H "Content-Type: application/json" `
+  -d "{\"model\":\"gpt-3.5-turbo\",\"messages\":[{\"role\":\"user\",\"content\":\"测试\"}]}"</pre>
+          <div class="hint" style="margin-top:0">或者用原生 PowerShell 语法（<code>Invoke-RestMethod</code> 会自动把返回的 JSON 解析成对象，不用再 <code>ConvertFrom-Json</code>）：</div>
+          <pre class="tutorial-code">Invoke-RestMethod -Uri "http://localhost:8788/v1/chat/completions" `
+  -Method Post `
+  -Headers @{ Authorization = "Bearer sk-mock" } `
+  -ContentType "application/json" `
+  -Body '{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"测试"}]}'</pre>
+          <div class="hint">HTTPS 模式下把 <code>http://</code> 换成 <code>https://</code>；自签证书场景 <code>curl.exe</code> 加 <code>-k</code> 跳过校验，<code>Invoke-RestMethod</code> 加 <code>-SkipCertificateCheck</code>。</div>
+        </div>
+        </div>
       </template>
 
       <!-- ===== models ===== -->
@@ -335,7 +372,22 @@
               </div>
             </div>
             <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="sel.cacheCreationTokens" /></div>
-            <div class="row"><label>响应延迟 ms</label><input type="number" x-model.number="sel.latencyMs" /></div>
+            <div class="row"><label>响应延迟 ms</label>
+              <div class="grid2">
+                <select x-model="sel.latencyMode"><option value="fixed">fixed（固定）</option><option value="range">range（范围随机）</option></select>
+                <input type="number" x-model.number="sel.latencyMs" x-show="sel.latencyMode==='fixed'" />
+              </div>
+            </div>
+            <div class="row" x-show="sel.latencyMode==='range'"><label>延迟范围 ms</label>
+              <div class="grid2">
+                <input type="number" x-model.number="sel.latencyMin" placeholder="最小" />
+                <input type="number" x-model.number="sel.latencyMax" placeholder="最大" />
+              </div>
+            </div>
+            <div class="row" x-show="sel.latencyMode==='range'"><label>分布</label>
+              <select x-model="sel.latencyDist"><option value="uniform">均匀随机数</option><option value="normal">正态分布随机数</option></select>
+            </div>
+            <div class="hint" x-show="sel.latencyMode==='range'" style="margin:-4px 0 10px">均匀：区间内等概率；正态：以区间中点为均值、区间的六分之一为标准差，两端极小概率的尾部会被夹回区间内，不会溢出。每次请求都会重新采样一次延迟值，可以在「Recent Requests」里看实际用了多少 ms。</div>
             <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="sel.chunkDelayMs" /></div>
             <div class="row"><label>注入错误码</label>
               <div class="grid2">
@@ -344,7 +396,7 @@
               </div>
             </div>
             <div class="row"><label>错误信息</label><input x-model="sel.errorMessage" /></div>
-            <div class="btns"><button class="primary" @click="saveModel()">Save</button></div>
+            <div class="btns"><button class="primary" @click="saveModel()">Save</button><button @click="openSaveAsPreset()">另存为预设</button></div>
 
             <div class="field-label">调用路径 — 本机本地</div>
             <div class="ep"><code x-text="endpointFor('http://localhost:' + port)"></code><button class="sm" @click="copy(endpointFor('http://localhost:' + port))">Copy</button></div>
@@ -399,7 +451,21 @@
                 </div>
               </div>
               <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="presetForm.cacheCreationTokens" /></div>
-              <div class="row"><label>响应延迟 ms</label><input type="number" x-model.number="presetForm.latencyMs" /></div>
+              <div class="row"><label>响应延迟 ms</label>
+                <div class="grid2">
+                  <select x-model="presetForm.latencyMode"><option value="fixed">fixed（固定）</option><option value="range">range（范围随机）</option></select>
+                  <input type="number" x-model.number="presetForm.latencyMs" x-show="presetForm.latencyMode==='fixed'" />
+                </div>
+              </div>
+              <div class="row" x-show="presetForm.latencyMode==='range'"><label>延迟范围 ms</label>
+                <div class="grid2">
+                  <input type="number" x-model.number="presetForm.latencyMin" placeholder="最小" />
+                  <input type="number" x-model.number="presetForm.latencyMax" placeholder="最大" />
+                </div>
+              </div>
+              <div class="row" x-show="presetForm.latencyMode==='range'"><label>分布</label>
+                <select x-model="presetForm.latencyDist"><option value="uniform">均匀随机数</option><option value="normal">正态分布随机数</option></select>
+              </div>
               <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="presetForm.chunkDelayMs" /></div>
               <div class="row"><label>注入错误码</label>
                 <div class="grid2">
@@ -415,18 +481,51 @@
         </div>
       </template>
 
+      <!-- ===== channels ===== -->
+      <template x-if="tab==='channels'">
+        <div class="card">
+          <h2>Channels（模拟多个上游渠道）</h2>
+          <div class="card-sub">每个渠道有自己的 Base URL（<code>/ch/&lt;id&gt;</code>），配成 new-api 里不同的渠道，测权重/失败转移/限流这些跨渠道逻辑。不加 <code>/ch/</code> 前缀的原有请求路径完全不受影响。</div>
+          <table>
+            <thead><tr><th>Name</th><th>Enabled</th><th>Error Rate %</th><th>Extra Latency ms</th><th>Base URL</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="c in channels" :key="c.id">
+                <tr>
+                  <td><input x-model="c.name" @change="saveChannel(c)" /></td>
+                  <td style="text-align:center"><input type="checkbox" x-model="c.enabled" @change="saveChannel(c)" /></td>
+                  <td><input type="number" min="0" max="100" x-model.number="c.errorRate" @change="saveChannel(c)" /></td>
+                  <td><input type="number" x-model.number="c.extraLatencyMs" @change="saveChannel(c)" /></td>
+                  <td>
+                    <div style="display:flex; align-items:center; gap:6px">
+                      <code x-text="origin + '/ch/' + c.id" style="white-space:nowrap"></code>
+                      <button class="sm" @click="copy(origin + '/ch/' + c.id)">Copy</button>
+                    </div>
+                  </td>
+                  <td><button class="sm danger" @click="delChannel(c.id)">Delete</button></td>
+                </tr>
+              </template>
+              <tr x-show="!channels.length"><td colspan="6" style="color:var(--mut)">No channels</td></tr>
+            </tbody>
+          </table>
+          <div class="btns" style="margin-top:10px"><button class="primary" @click="openNewChannelDialog()">+ New Channel</button></div>
+          <div class="hint">Enabled 关掉、或者 Error Rate 拉高，都会让这个渠道下的所有请求直接失败（不管打的是哪个模型），配合 Extra Latency 一起可以模拟"渠道变慢 / 不稳定 / 整个挂掉"。字段改完失焦即保存。</div>
+        </div>
+      </template>
+
       <!-- ===== recent ===== -->
       <template x-if="tab==='recent'">
         <div class="card">
           <h2>Recent Requests</h2>
-          <table><thead><tr><th>Time</th><th>Model</th><th>Fmt</th><th>Stream</th><th>Result</th></tr></thead>
+          <table><thead><tr><th>Time</th><th>Model</th><th>Fmt</th><th>Stream</th><th>Channel</th><th>Latency</th><th>Result</th></tr></thead>
             <tbody>
               <template x-for="(x,i) in recent" :key="i">
                 <tr><td x-text="x.t"></td><td x-text="x.model"></td><td><span class="fmt" :class="x.format" x-text="x.format"></span></td>
                     <td x-text="x.stream?'yes':'—'"></td>
+                    <td x-text="x.channel || '—'"></td>
+                    <td x-text="x.latencyMs!=null ? x.latencyMs+'ms' : '—'"></td>
                     <td><span class="pill" :class="String(x.result).startsWith('ERR')?'err':'ok'" x-text="x.result"></span></td></tr>
               </template>
-              <tr x-show="!recent.length"><td colspan="5" style="color:var(--mut)">No requests yet</td></tr>
+              <tr x-show="!recent.length"><td colspan="7" style="color:var(--mut)">No requests yet</td></tr>
             </tbody>
           </table>
         </div>
@@ -564,12 +663,50 @@
   </div>
 </div>
 
+<div class="confirm-overlay" x-show="saveAsPresetState.open" x-cloak @keydown.escape.window="saveAsPresetState.open=false">
+  <div class="confirm-box" style="width:360px">
+    <div class="confirm-titlebar">另存为预设</div>
+    <div class="confirm-body">
+      <div class="row" style="grid-template-columns:64px 1fr; margin-bottom:0">
+        <label>名称</label>
+        <input x-ref="saveAsPresetInput" x-model="saveAsPresetState.name" placeholder="例如 我的场景" @keydown.enter="confirmSaveAsPreset()" />
+      </div>
+      <div class="hint" style="margin:8px 0 0">把当前模型的行为字段（token/缓存/延迟/错误…，不含模型名和回复内容）存成一个新预设，同名会覆盖。</div>
+    </div>
+    <div class="confirm-actions">
+      <button @click="saveAsPresetState.open=false">Cancel</button>
+      <button class="primary" @click="confirmSaveAsPreset()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="confirm-overlay" x-show="newChannelState.open" x-cloak @keydown.escape.window="newChannelState.open=false">
+  <div class="confirm-box" style="width:360px">
+    <div class="confirm-titlebar">New Channel</div>
+    <div class="confirm-body">
+      <div class="row" style="grid-template-columns:64px 1fr; margin-bottom:0">
+        <label>ID</label>
+        <input x-ref="newChannelIdInput" x-model="newChannelState.id" placeholder="例如 backup-2" @keydown.enter="confirmNewChannel()" />
+      </div>
+      <div class="row" style="grid-template-columns:64px 1fr; margin-bottom:0; margin-top:9px">
+        <label>名称</label>
+        <input x-model="newChannelState.name" placeholder="例如 备用渠道 2" @keydown.enter="confirmNewChannel()" />
+      </div>
+      <div class="hint" style="margin-top:8px">ID 会出现在 Base URL 里（<code>/ch/&lt;id&gt;</code>），建议用英文/数字/短横线。</div>
+    </div>
+    <div class="confirm-actions">
+      <button @click="newChannelState.open=false">Cancel</button>
+      <button class="primary" @click="confirmNewChannel()">Create</button>
+    </div>
+  </div>
+</div>
+
 <script>
 function app() {
   return {
     origin: location.origin,
     tab: "models",
-    models: [], presets: [], recent: [], sel: null, toastMsg: "",
+    models: [], presets: [], channels: [], recent: [], sel: null, toastMsg: "",
     editingPreset: "", presetForm: {},
     modelSearch: "", collapsedGroups: {},
     confirmState: { open:false, message:"", resolveFn:null },
@@ -630,6 +767,8 @@ function app() {
       return '<svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="9" y="9" width="6" height="6" fill="currentColor"/></svg>';
     },
     newModelState: { open:false, vendor:"custom-openai", id:"" },
+    saveAsPresetState: { open:false, name:"" },
+    newChannelState: { open:false, id:"", name:"" },
     auth: { passwordSet:false, authenticated:false, trustedByIp:true,
             lan:{mode:"allow-all",list:null}, public:{mode:"whitelist",list:null} },
     authForm: { password:"", lan:{mode:"allow-all",list:""}, public:{mode:"whitelist",list:""} },
@@ -643,7 +782,7 @@ function app() {
       window.addEventListener("keydown", (e) => {
         if (this.confirmState.open) return; // Escape 由 @keydown.escape.window 处理
         if (["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName)) return;
-        const map = { "1":"tutorial", "2":"models", "3":"presets", "4":"recent", "5":"network" };
+        const map = { "1":"tutorial", "2":"models", "3":"presets", "4":"channels", "5":"recent", "6":"network" };
         if (map[e.key]) this.tab = map[e.key];
       });
     },
@@ -685,7 +824,9 @@ function app() {
     },
     async loadState() {
       const r = await fetch("/__state"); const s = await r.json();
-      this.models = s.models; this.presets = s.presets; this.port = s.port; this.lanIps = s.lanIps || [];
+      // enabled 在库里是 0/1(SQLite 没 boolean)，Alpine 的 checkbox x-model 要真布尔值才会显示勾上，这里转一下；
+      // 存回去的时候 store.js 的 normalizeChannel 会把 true/false 自动转回 1/0，不用在 saveChannel 里特地转。
+      this.models = s.models; this.presets = s.presets; this.channels = (s.channels || []).map(c => ({ ...c, enabled: !!c.enabled })); this.port = s.port; this.lanIps = s.lanIps || [];
       if (this.sel) { const still = this.models.find(m => m.id === this.sel.id); this.sel = still ? JSON.parse(JSON.stringify(still)) : (this.models[0] ? JSON.parse(JSON.stringify(this.models[0])) : null); }
     },
     async loadAuthStatus() {
@@ -700,6 +841,41 @@ function app() {
       const r = await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(this.sel) });
       if (r.ok) { const {model} = await r.json(); await this.loadState(); this.select(model.id); this.toast("已保存并生效"); }
       else this.toast("保存失败", false);
+    },
+    openSaveAsPreset() {
+      if (!this.sel) return;
+      this.saveAsPresetState = { open:true, name:"" };
+      this.$nextTick(() => this.$refs.saveAsPresetInput && this.$refs.saveAsPresetInput.focus());
+    },
+    async confirmSaveAsPreset() {
+      const name = this.saveAsPresetState.name.trim();
+      if (!name) { this.toast("请输入预设名称", false); return; }
+      // /__presets 只会从 patch 里挑行为字段(id/vendor/format/content 会被自动忽略)，整个 sel 丢过去就行
+      await fetch("/__presets", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ name, patch: this.sel }) });
+      this.saveAsPresetState.open = false;
+      await this.loadState(); this.toast("已存为预设「" + name + "」");
+    },
+    async saveChannel(c) {
+      await fetch("/__channels", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(c) });
+      await this.loadState();
+    },
+    async delChannel(id) {
+      const ok = await this.askConfirm("Delete channel \"" + id + "\"? This cannot be undone.");
+      if (!ok) return;
+      await fetch("/__channels/" + encodeURIComponent(id), { method:"DELETE" });
+      await this.loadState(); this.toast("已删除渠道");
+    },
+    openNewChannelDialog() {
+      this.newChannelState = { open:true, id:"", name:"" };
+      this.$nextTick(() => this.$refs.newChannelIdInput && this.$refs.newChannelIdInput.focus());
+    },
+    async confirmNewChannel() {
+      const id = this.newChannelState.id.trim();
+      if (!id) { this.toast("请输入渠道 ID", false); return; }
+      const name = this.newChannelState.name.trim() || id;
+      await fetch("/__channels", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id, name }) });
+      this.newChannelState.open = false;
+      await this.loadState(); this.toast("已新建渠道");
     },
     openNewModelDialog() {
       this.newModelState = { open:true, vendor:"custom-openai", id:"" };
@@ -738,7 +914,8 @@ function app() {
     async pollStats() { const r = await fetch("/__stats"); this.recent = (await r.json()).recent; },
     presetDefaults() {
       return { promptMode:"auto", promptTokens:100, completionTokens:30, cacheMode:"none", cacheRatio:0.5,
-        cachedTokens:0, cacheCreationTokens:0, latencyMs:0, chunkDelayMs:40, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
+        cachedTokens:0, cacheCreationTokens:0, latencyMs:0, latencyMode:"fixed", latencyMin:0, latencyMax:0, latencyDist:"uniform",
+        chunkDelayMs:40, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
     },
     newPreset() { this.editingPreset = "__new__"; this.presetForm = { name:"", ...this.presetDefaults() }; },
     editPreset(p) { this.editingPreset = p.name; this.presetForm = { name:p.name, ...this.presetDefaults(), ...p.patch }; },

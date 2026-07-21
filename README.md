@@ -101,8 +101,11 @@ docker run --rm -p 8788:8788 ghcr.io/lanvender4444/mockupstream:latest
 - **左栏 模型列表**：新建 / 复制 / 删除；点一行进入编辑；进页面自动选中第一个。
 - **右栏 编辑器**：改模型名、协议格式、回复内容、输入/输出/缓存 token、延迟、流式块间隔、注入错误码+概率。改完点**保存**（整表 upsert）。
 - **预设按钮**（正常基准 / 高缓存命中 / 超长上下文 / 超长输出 / 错误超时）：点一下**一次性填满整表**，仍需点保存写入。
+- **响应延迟**支持两种模式：`fixed`（固定 ms）和 `range`（区间内随机，每次请求重新采样）；`range` 下再选分布——`均匀随机数` 或 `正态分布随机数`（以区间中点为均值，区间的 1/6 为标准差，两端会被夹回区间内，不会溢出）。流式/非流式都吃得到，因为延迟是在两者共同的"发出响应前"那一步生效的。新增了一个内置预设「长延迟」（3000～10000ms，正态分布）。实际采样到的延迟值会记在「Recent Requests」的 Latency 列里。
 - **预设管理**：可**新建 / 编辑（patch JSON）/ 删除**自定义预设，即时存库。
+- **Model Configuration 表单**下面有个「另存为预设」按钮：把当前模型的行为字段（token/缓存/延迟/错误…，不含模型名和回复内容）直接存成一个新预设，只用输入个名字，不用切到 Presets 标签页重新填一遍。
 - **Base URL / endpoint 提示**：直接复制到 new-api 渠道；Docker 下把 `localhost` 换成 `host.docker.internal`。
+- **Channels 标签页**：模拟多个上游渠道（各自独立的 Base URL、开关、错误率、额外延迟），详见下面「多渠道模拟」一节。
 - **最近请求**：实时表格，看每次调用的模型/格式/流/token/错误。
 
 > 预置了常见模型：`grok-4.5` `deepseek-v4-flash` `qwen3-max` `kimi-k2` `glm-4.6` `mimo-v2.5`（均 openai 格式）、`gemini-2.5-pro`（gemini）、`claude-opus-4-8`（claude）。
@@ -254,6 +257,7 @@ MockUpStream/
 ├── tls.js               # HTTPS 证书路径解析(自签证书场景)
 ├── package.json         # bun run start / bun run https 两个命令别名，没有依赖
 ├── scripts/gen-cert.sh  # 生成本地自签证书
+├── scripts/cli.js       # 命令行增删模型/预设(bun run cli ...)
 ├── Caddyfile.example    # 公网+域名场景的反代示例(自动 HTTPS)
 ├── mock.db              # SQLite 持久化（自动生成，可删除以重置；已 gitignore）
 └── formats.test.js      # bun test
@@ -279,7 +283,73 @@ curl -s "http://localhost:8788/v1beta/models/gemini-2.5-pro:generateContent" -H 
   -d '{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}'
 ```
 
+> `Authorization: Bearer sk-xxx` 这个 mock 完全不校验，随便填一个字符串（比如 `sk-mock`）甚至不带都行——鉴权是 new-api 自己做的，跟直接打 mock 没关系。
+>
+> PowerShell 里 `curl` 默认是 `Invoke-WebRequest` 的别名，`-H` 参数语法跟真 curl 不一样，直接抄上面 Bash 的命令会报参数绑定错误。用 `curl.exe`（Windows 自带的真 curl，显式带 `.exe` 后缀绕开别名）：
+> ```powershell
+> curl.exe http://localhost:8788/v1/chat/completions `
+>   -H "Authorization: Bearer sk-mock" `
+>   -H "Content-Type: application/json" `
+>   -d "{\"model\":\"gpt-3.5-turbo\",\"messages\":[{\"role\":\"user\",\"content\":\"测试\"}]}"
+> ```
+> 或者用原生 PowerShell 语法：
+> ```powershell
+> Invoke-RestMethod -Uri "http://localhost:8788/v1/chat/completions" `
+>   -Method Post -Headers @{ Authorization = "Bearer sk-mock" } -ContentType "application/json" `
+>   -Body '{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"测试"}]}'
+> ```
+> HTTPS 模式（见上面「HTTPS」一节）把 `http://` 换成 `https://`；自签证书场景 `curl.exe` 加 `-k` 跳过校验，`Invoke-RestMethod` 加 `-SkipCertificateCheck`。
 
+
+
+---
+
+## 命令行管理模型/预设（不用开网页）
+
+`scripts/cli.js` 直接读写 `mock.db`（跟 `server.js` 用同一个 `store.js`），不需要服务在跑；服务在跑的时候也能用（SQLite 文件锁保证不会读到写一半的脏数据，但别跟网页控制台同时保存同一个模型）。
+
+```bash
+bun run cli add-model my-model --vendor=grok --preset=长延迟   # 新建/更新模型，直接套一个已有预设
+bun run cli apply-preset my-model 长延迟                       # 给已有模型套预设
+bun run cli add-preset 我的预设 --from=my-model                # 把某个模型当前的行为字段另存为新预设
+bun run cli add-preset 我的预设 --latencyMode=range --latencyMin=3000 --latencyMax=9000 --latencyDist=normal  # 或者直接用字段拼一个
+bun run cli list-models
+bun run cli list-presets
+bun run cli delete-model my-model
+bun run cli delete-preset 我的预设
+```
+
+字段名（`--vendor` `--latencyMode` `--promptTokens` 等等）跟控制台里的字段一一对应，具体列表看 `store.js` 的 `MODEL_DEFAULTS`；`--preset`/`--from` 之外的 `--字段=值` 都会做数字/文本自动转换后直接写进模型或预设。
+
+渠道也有对应命令：
+```bash
+bun run cli add-channel backup-2 --name="备用渠道 2" --extraLatencyMs=800   # 新建/更新渠道
+bun run cli add-channel flaky-2 --errorRate=30                          # 偶发故障
+bun run cli add-channel down-2 --enabled=false                          # 模拟这个渠道整个挂了
+bun run cli list-channels
+bun run cli delete-channel backup-2
+```
+
+---
+
+## 多渠道模拟（Channels）
+
+现在这个 mock 只有一个 Base URL，new-api 里配多个渠道时全都只能指向这一个地址，没法测"某个渠道挂了/限流/变慢，new-api 该转移到别的渠道"这类跨渠道逻辑（权重、失败转移、限流降级）。控制台的 **Channels** 标签页可以建任意多个渠道，每个都有自己的 Base URL：
+
+```
+http://localhost:8788/ch/<channelId>
+```
+
+不加 `/ch/` 前缀的原有请求路径（`http://localhost:8788` 直接打）完全不受影响，行为跟以前一模一样——渠道功能是纯新增的，不用也不影响任何现有用法。
+
+每个渠道能单独控制：
+- **Enabled**：关掉后，这个渠道下所有请求（不管打哪个模型）直接返回渠道级错误，模拟"渠道挂了"。
+- **Error Rate %**：独立于模型自己的错误注入，按概率让请求失败，模拟"渠道不稳定，偶发故障"。
+- **Extra Latency ms**：叠加在模型自身延迟之上，模拟"这个渠道网络更慢"。
+
+首次建库会自动种 3 个示例渠道，直接对应典型的多渠道测试场景：`primary`（主渠道，正常）、`backup`（备用渠道，多 800ms 延迟）、`flaky`（不稳定渠道，30% 错误率）。在 new-api 里把这三个 Base URL 配成同一组的不同渠道（设权重/优先级），就能测权重分流、主渠道故障时是否正确转移到备用渠道、遇到 flaky 渠道时重试逻辑对不对。
+
+「Recent Requests」表格的 Channel 列会标出每次请求实际走的是哪个渠道（没加前缀的直连请求显示 `—`），方便核对测试结果。
 
 ---
 

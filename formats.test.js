@@ -1,6 +1,6 @@
 // formats.test.js —— bun test: 校验三种格式的 usage 映射与流式末块含 usage。
 import { test, expect } from "bun:test";
-import { computeUsage, chunkText } from "./usage.js";
+import { computeUsage, chunkText, resolveLatencyMs } from "./usage.js";
 import * as openai from "./formats/openai.js";
 import * as claude from "./formats/claude.js";
 import * as gemini from "./formats/gemini.js";
@@ -109,4 +109,40 @@ test("chunkText: 超长文本被限制在 <=120 块且无丢失", () => {
   const chunks = chunkText(text);
   expect(chunks.length).toBeLessThanOrEqual(120);
   expect(chunks.join("")).toBe(text);
+});
+
+test("resolveLatencyMs: fixed 模式直接用 latencyMs", () => {
+  expect(resolveLatencyMs({ latencyMode: "fixed", latencyMs: 500 })).toBe(500);
+  expect(resolveLatencyMs({ latencyMode: "fixed", latencyMs: -5 })).toBe(0); // 不允许负数
+});
+
+test("resolveLatencyMs: range + uniform 落在 [min,max] 区间内", () => {
+  for (let i = 0; i < 200; i++) {
+    const v = resolveLatencyMs({ latencyMode: "range", latencyDist: "uniform", latencyMin: 100, latencyMax: 300 });
+    expect(v).toBeGreaterThanOrEqual(100);
+    expect(v).toBeLessThanOrEqual(300);
+  }
+});
+
+test("resolveLatencyMs: range + uniform 用固定 rand() 能精确算出取值", () => {
+  const v = resolveLatencyMs({ latencyMode: "range", latencyDist: "uniform", latencyMin: 100, latencyMax: 300 }, () => 0.5);
+  expect(v).toBe(200); // 100 + 0.5*(300-100)
+});
+
+test("resolveLatencyMs: range + normal 也夹在 [min,max] 区间内(哪怕 rand 落在极端值)", () => {
+  const cfg = { latencyMode: "range", latencyDist: "normal", latencyMin: 1000, latencyMax: 5000 };
+  // Box-Muller 用到的 u 接近 0 会产生很大的正态值, 验证最终还是被夹住
+  const extreme = resolveLatencyMs(cfg, () => 1e-6);
+  expect(extreme).toBeGreaterThanOrEqual(1000);
+  expect(extreme).toBeLessThanOrEqual(5000);
+  for (let i = 0; i < 200; i++) {
+    const v = resolveLatencyMs(cfg, Math.random);
+    expect(v).toBeGreaterThanOrEqual(1000);
+    expect(v).toBeLessThanOrEqual(5000);
+  }
+});
+
+test("resolveLatencyMs: max<=min 时直接返回 min, 不报错", () => {
+  expect(resolveLatencyMs({ latencyMode: "range", latencyMin: 500, latencyMax: 100 })).toBe(500);
+  expect(resolveLatencyMs({ latencyMode: "range", latencyMin: 500, latencyMax: 500 })).toBe(500);
 });

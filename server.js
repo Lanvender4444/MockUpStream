@@ -20,7 +20,7 @@ import { networkInterfaces } from "os";
 import * as store from "./store.js";
 import * as auth from "./auth.js";
 import { resolveTls } from "./tls.js";
-import { shouldInjectError } from "./usage.js";
+import { shouldInjectError, resolveLatencyMs, shouldChannelFail } from "./usage.js";
 import * as openai from "./formats/openai.js";
 import * as claude from "./formats/claude.js";
 import * as gemini from "./formats/gemini.js";
@@ -103,17 +103,27 @@ document.getElementById("f").addEventListener("submit", async (e) => {
 </body></html>`;
 }
 
-// 通用: 处理一次上游请求(某格式)
-async function handleUpstream(fmtName, fmt, req, url) {
+// 通用: 处理一次上游请求(某格式)。channel 为 null 表示走的是不带 /ch/ 前缀的直连路径。
+async function handleUpstream(fmtName, fmt, req, url, channel) {
   const body = await req.json().catch(() => ({}));
   const parsed = fmt.parseRequest(body, url);
+
+  // 渠道级门禁(渠道被关掉/偶发故障): 直接失败, 不等模型自己的延迟——渠道都连不上, 没有"先等会再失败"这回事。
+  if (shouldChannelFail(channel)) {
+    record({ model: parsed.model || "(unknown)", format: fmtName, stream: parsed.stream, result: `ERR ${channel.errorStatus}(channel)`, channel: channel.id });
+    return json(fmt.buildError({ errorMessage: channel.errorMessage, errorStatus: channel.errorStatus }), Number(channel.errorStatus));
+  }
+
   const cfg = store.resolveModel(parsed.model, fmtName);
 
-  if (Number(cfg.latencyMs) > 0) await sleep(Number(cfg.latencyMs));
+  const latencyMs = resolveLatencyMs(cfg) + (channel ? Number(channel.extraLatencyMs) || 0 : 0);
+  if (latencyMs > 0) await sleep(latencyMs);
+
+  const channelTag = channel ? channel.id : null;
 
   // 注入错误
   if (shouldInjectError(cfg)) {
-    record({ model: parsed.model || cfg.id, format: fmtName, stream: parsed.stream, result: `ERR ${cfg.errorStatus}` });
+    record({ model: parsed.model || cfg.id, format: fmtName, stream: parsed.stream, result: `ERR ${cfg.errorStatus}`, latencyMs, channel: channelTag });
     return json(fmt.buildError(cfg), Number(cfg.errorStatus));
   }
 
@@ -122,7 +132,7 @@ async function handleUpstream(fmtName, fmt, req, url) {
   // 非流式
   if (!parsed.stream) {
     const resp = fmt.buildResponse(cfg, parsed.messages, modelName);
-    record({ model: modelName, format: fmtName, stream: false, result: usageTag(fmtName, resp) });
+    record({ model: modelName, format: fmtName, stream: false, result: usageTag(fmtName, resp), latencyMs, channel: channelTag });
     return json(resp);
   }
 
@@ -146,7 +156,7 @@ async function handleUpstream(fmtName, fmt, req, url) {
       controller.close();
     },
   });
-  record({ model: modelName, format: fmtName, stream: true, result: "stream" });
+  record({ model: modelName, format: fmtName, stream: true, result: "stream", latencyMs, channel: channelTag });
   return new Response(stream, {
     headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Mock-Upstream": "1" },
   });
@@ -163,7 +173,18 @@ Bun.serve({
   ...(TLS ? { tls: { cert: Bun.file(TLS.certPath), key: Bun.file(TLS.keyPath) } } : {}),
   async fetch(req, server) {
     const url = new URL(req.url);
-    const p = url.pathname;
+    let p = url.pathname;
+
+    // ---------- 渠道路由：/ch/<channelId>/... 复用下面所有 /v1/... 路由，剥掉前缀后当正常路径走 ----------
+    // 渠道是否健康(禁用/错误率)留到 handleUpstream 里查(那时候才知道具体是哪个协议格式，错误体形状才对得上)；
+    // 这里只管"这个渠道 id 存不存在"——根本没这个渠道，就跟 Base URL 写错一样，直接 404。
+    let channel = null;
+    const chMatch = p.match(/^\/ch\/([^/]+)(\/.*)$/);
+    if (chMatch) {
+      channel = store.getChannel(decodeURIComponent(chMatch[1]));
+      if (!channel) return new Response("mock upstream: unknown channel " + chMatch[1], { status: 404 });
+      p = chMatch[2];
+    }
 
     // ---------- 身份验证网关：控制台页面 + 全部 /__* 管理接口 ----------
     const authExempt = p === "/__auth/login" || p === "/__auth/status" || p.startsWith("/vendor/");
@@ -267,20 +288,29 @@ Bun.serve({
       await store.deletePreset(decodeURIComponent(p.slice("/__presets/".length)));
       return json({ ok: true });
     }
+    if (p === "/__channels" && req.method === "POST") {
+      const c = await req.json().catch(() => ({}));
+      return json({ ok: true, channel: await store.upsertChannel(c) });
+    }
+    if (p.startsWith("/__channels/") && req.method === "DELETE") {
+      await store.deleteChannel(decodeURIComponent(p.slice("/__channels/".length)));
+      return json({ ok: true });
+    }
     if (p === "/__reset" && req.method === "POST") return json({ ok: true, state: await store.reset() });
 
     // ---------- 上游 API ----------
     if (p === "/v1/models") {
+      if (shouldChannelFail(channel)) return json({ error: { message: channel.errorMessage, type: "channel_unavailable" } }, Number(channel.errorStatus));
       const data = store.getState().models
         .filter((m) => m.format === "openai")
         .map((m) => ({ id: m.id, object: "model", owned_by: "mock" }));
       if (!data.length) data.push({ id: "gpt-3.5-turbo", object: "model", owned_by: "mock" });
       return json({ object: "list", data });
     }
-    if (p === "/v1/chat/completions" && req.method === "POST") return handleUpstream("openai", openai, req, url);
-    if (p === "/v1/messages" && req.method === "POST") return handleUpstream("claude", claude, req, url);
+    if (p === "/v1/chat/completions" && req.method === "POST") return handleUpstream("openai", openai, req, url, channel);
+    if (p === "/v1/messages" && req.method === "POST") return handleUpstream("claude", claude, req, url, channel);
     if (p.match(/\/models\/[^:]+:(generateContent|streamGenerateContent)/) && req.method === "POST")
-      return handleUpstream("gemini", gemini, req, url);
+      return handleUpstream("gemini", gemini, req, url, channel);
 
     return new Response("mock upstream: not found " + p, { status: 404 });
   },
@@ -295,6 +325,11 @@ console.log(`mock upstream listening on ${PROTOCOL}://localhost:${PORT}`);
 console.log(`→ 控制台:      ${PROTOCOL}://localhost:${PORT}/`);
 console.log(`→ 渠道 Base URL: ${PROTOCOL}://localhost:${PORT}   (Docker: ${PROTOCOL}://host.docker.internal:${PORT})`);
 console.log(`  OpenAI /v1/chat/completions · Claude /v1/messages · Gemini /v1beta/models/{m}:generateContent`);
+const seededChannels = store.getState().channels;
+if (seededChannels.length) {
+  console.log(`  模拟多渠道(在控制台 Channels 标签页管理，可增删/开关/调错误率延迟)：`);
+  for (const c of seededChannels) console.log(`    ${c.name.padEnd(14)} ${PROTOCOL}://localhost:${PORT}/ch/${c.id}`);
+}
 if (TLS) console.log(`  HTTPS 已启用(证书: ${TLS.certPath})。自签证书首次访问浏览器会报不可信，点"继续访问"即可；公网+域名场景建议改用 Caddy/nginx 反代，见 README。`);
 if (!store.getAuthConfig().passwordHash) {
   console.log(`  提醒: 控制台尚未设置密码，谁都能访问和修改配置。要给局域网/公网同事用之前，去面板"网络与安全"设一个。`);

@@ -21,6 +21,10 @@ export const MODEL_DEFAULTS = {
   cachedTokens: 0,
   cacheCreationTokens: 0,
   latencyMs: 0,
+  latencyMode: "fixed",   // "fixed" | "range" —— range 模式下 latencyMs 不用, 看 latencyMin/Max/Dist
+  latencyMin: 0,
+  latencyMax: 0,
+  latencyDist: "uniform", // "uniform" | "normal" —— 只在 latencyMode==="range" 时生效
   chunkDelayMs: 40,
   errorStatus: 0,
   errorRate: 0,
@@ -38,6 +42,19 @@ export const VENDOR_FORMAT_MAP = {
 };
 
 const COLS = Object.keys(MODEL_DEFAULTS); // 列顺序 = 字段顺序
+
+// 渠道行为字段默认值(新建/兜底用)。渠道跟模型解耦——任何渠道都能打任何已配置的模型，
+// 渠道只管"这条链路本身通不通、稳不稳、快不快"，不管模型返回的具体内容。
+export const CHANNEL_DEFAULTS = {
+  id: "default",
+  name: "渠道",
+  enabled: 1,             // 0/1(SQLite 没有 boolean); 0 时该渠道下所有请求直接返回渠道级错误，模拟"渠道挂了"
+  errorRate: 0,           // 0-100，独立于模型自己的 errorRate，模拟"渠道不稳定，偶发失败"
+  errorStatus: 503,
+  errorMessage: "channel unavailable (mock)",
+  extraLatencyMs: 0,      // 叠加在模型自身延迟之上，模拟"这个渠道网络更慢"
+};
+const CHANNEL_COLS = Object.keys(CHANNEL_DEFAULTS);
 
 // 预设只承载"行为字段"(不含 id/format/vendor/content)，套用时覆盖模型对应字段。
 export const PRESET_FIELDS = COLS.filter((c) => !["id", "format", "vendor", "content"].includes(c));
@@ -65,12 +82,21 @@ const DEFAULT_MODELS = [
   { ...MODEL_DEFAULTS, id: "claude-opus-4-8", format: "claude", vendor: "claude" },
 ];
 
+// 3 个示例渠道，直接演示典型的多渠道测试场景(权重/失败转移/限流降级)。
+const DEFAULT_CHANNELS = [
+  { ...CHANNEL_DEFAULTS, id: "primary", name: "主渠道" },
+  { ...CHANNEL_DEFAULTS, id: "backup", name: "备用渠道(模拟慢)", extraLatencyMs: 800 },
+  { ...CHANNEL_DEFAULTS, id: "flaky", name: "不稳定渠道(模拟偶发故障)", errorRate: 30, errorMessage: "mock channel error (simulated instability)" },
+];
+
 let db;
 
 // 规范化: 补全缺省 + 数字字段转 number + 厂商合法性校验 + 协议格式由厂商推导(不再单独校验/接受 format)
 function normalizeModel(m) {
   const out = { ...MODEL_DEFAULTS, ...m };
   for (const k of COLS) {
+    // 老库刚 ALTER 加的列, 已有行读出来是 SQL NULL(不是"字段不存在"), 上面那行 spread 接不住, 这里兜一次
+    if (out[k] == null) out[k] = MODEL_DEFAULTS[k];
     if (typeof MODEL_DEFAULTS[k] === "number") out[k] = Number(out[k]) || 0;
   }
   out.id = String(out.id || "").trim() || "unnamed";
@@ -79,16 +105,43 @@ function normalizeModel(m) {
   return out;
 }
 
+function colSqlType(c) {
+  if (typeof MODEL_DEFAULTS[c] !== "number") return "TEXT";
+  return c === "cacheRatio" ? "REAL" : "INTEGER";
+}
+
+// 规范化渠道: 补全缺省 + 数字字段转 number + id 兜底。渠道字段全是标量, 不需要像模型那样推导厂商/协议。
+function normalizeChannel(c) {
+  const out = { ...CHANNEL_DEFAULTS, ...c };
+  for (const k of CHANNEL_COLS) {
+    if (out[k] == null) out[k] = CHANNEL_DEFAULTS[k];
+    if (typeof CHANNEL_DEFAULTS[k] === "number") out[k] = Number(out[k]) || 0;
+  }
+  out.id = String(out.id || "").trim() || "unnamed";
+  return out;
+}
+
+function channelColSqlType(c) {
+  return typeof CHANNEL_DEFAULTS[c] === "number" ? "INTEGER" : "TEXT";
+}
+
 function initSchema() {
-  const colDefs = COLS.map((c) => {
-    if (c === "id") return "id TEXT PRIMARY KEY";
-    const t = typeof MODEL_DEFAULTS[c] === "number"
-      ? (c === "cacheRatio" ? "REAL" : "INTEGER")
-      : "TEXT";
-    return `${c} ${t}`;
-  }).join(", ");
+  const colDefs = COLS.map((c) => (c === "id" ? "id TEXT PRIMARY KEY" : `${c} ${colSqlType(c)}`)).join(", ");
   db.run(`CREATE TABLE IF NOT EXISTS models (${colDefs}, ord INTEGER)`);
   db.run(`CREATE TABLE IF NOT EXISTS presets (name TEXT PRIMARY KEY, patch TEXT, ord INTEGER)`);
+  const channelColDefs = CHANNEL_COLS.map((c) => (c === "id" ? "id TEXT PRIMARY KEY" : `${c} ${channelColSqlType(c)}`)).join(", ");
+  db.run(`CREATE TABLE IF NOT EXISTS channels (${channelColDefs}, ord INTEGER)`);
+}
+
+// 老库缺新增字段的列(比如这次新增的延迟范围/分布字段): 通用地补齐 COLS 里所有还没有的列，
+// 不用每加一个新字段都单独写一个迁移函数。已有列不动，不影响用户已有数据；新列读出来是 NULL，
+// 靠 normalizeModel() 里的兜底补回默认值。vendor 列有自己的迁移(还要顺带猜值)，放在这个之前跑。
+function migrateModelColumns() {
+  const existing = new Set(db.query("PRAGMA table_info(models)").all().map((c) => c.name));
+  for (const col of COLS) {
+    if (col === "id" || existing.has(col)) continue;
+    db.run(`ALTER TABLE models ADD COLUMN ${col} ${colSqlType(col)}`);
+  }
 }
 
 // 老库没有 vendor 列(厂商分类是后加的字段): 补列 + 按 id 关键字猜一次厂商，猜不出来的按原 format 落到对应的
@@ -151,6 +204,8 @@ function seedIfEmpty() {
   if (nPresets === 0)
     BUILTIN_PRESETS.forEach((p, i) =>
       db.run("INSERT INTO presets (name, patch, ord) VALUES (?, ?, ?)", [p.name, JSON.stringify(normalizePatch(p.patch)), i]));
+  const nChannels = db.query("SELECT COUNT(*) c FROM channels").get().c;
+  if (nChannels === 0) DEFAULT_CHANNELS.forEach((c, i) => writeChannel(c, i));
 }
 
 // upsert 一个模型(带排序号)
@@ -169,6 +224,21 @@ function writeModel(m, ord) {
   return model;
 }
 
+// upsert 一个渠道(带排序号)，写法照抄 writeModel
+function writeChannel(c, ord) {
+  const channel = normalizeChannel(c);
+  const placeholders = CHANNEL_COLS.map(() => "?").join(", ");
+  const updates = CHANNEL_COLS.filter((k) => k !== "id").map((k) => `${k}=excluded.${k}`).join(", ");
+  const vals = CHANNEL_COLS.map((k) => channel[k]);
+  const useOrd = ord ?? (db.query("SELECT COALESCE(MAX(ord),-1)+1 n FROM channels").get().n || 0);
+  db.run(
+    `INSERT INTO channels (${CHANNEL_COLS.join(",")}, ord) VALUES (${placeholders}, ?)
+     ON CONFLICT(id) DO UPDATE SET ${updates}`,
+    [...vals, useOrd]
+  );
+  return channel;
+}
+
 function nextOrd() {
   return (db.query("SELECT COALESCE(MAX(ord),-1)+1 n FROM models").get().n) || 0;
 }
@@ -176,6 +246,11 @@ function nextOrd() {
 function rowToModel(row) {
   const { ord, ...rest } = row;
   return normalizeModel(rest);
+}
+
+function rowToChannel(row) {
+  const { ord, ...rest } = row;
+  return normalizeChannel(rest);
 }
 
 // ---------- 对外 API（与旧版一致）----------
@@ -187,6 +262,7 @@ export async function load(dbPath) {
   db.run("PRAGMA synchronous = FULL");
   initSchema();
   migrateVendorColumn();
+  migrateModelColumns();
   initAuthSchema();
   seedIfEmpty();
   return getState();
@@ -196,7 +272,8 @@ export function getState() {
   const models = db.query("SELECT * FROM models ORDER BY ord, rowid").all().map(rowToModel);
   const presets = db.query("SELECT name, patch FROM presets ORDER BY ord, rowid").all()
     .map((r) => ({ name: r.name, patch: JSON.parse(r.patch) }));
-  return { models, presets };
+  const channels = db.query("SELECT * FROM channels ORDER BY ord, rowid").all().map(rowToChannel);
+  return { models, presets, channels };
 }
 
 export function getModel(id) {
@@ -215,6 +292,19 @@ export async function upsertModel(m) {
 
 export async function deleteModel(id) {
   db.run("DELETE FROM models WHERE id = ?", [id]);
+}
+
+export function getChannel(id) {
+  const row = db.query("SELECT * FROM channels WHERE id = ?").get(id);
+  return row ? rowToChannel(row) : null;
+}
+
+export async function upsertChannel(c) {
+  return writeChannel(c);
+}
+
+export async function deleteChannel(id) {
+  db.run("DELETE FROM channels WHERE id = ?", [id]);
 }
 
 export async function applyPreset(id, presetName) {
@@ -246,6 +336,7 @@ export async function deletePreset(name) {
 export async function reset() {
   db.run("DELETE FROM models");
   db.run("DELETE FROM presets");
+  db.run("DELETE FROM channels");
   seedIfEmpty();
   return getState();
 }

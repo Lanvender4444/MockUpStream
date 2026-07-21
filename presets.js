@@ -10,6 +10,10 @@ const base = {
   cachedTokens: 0,
   cacheCreationTokens: 0,
   latencyMs: 0,
+  latencyMode: "fixed",
+  latencyMin: 0,
+  latencyMax: 0,
+  latencyDist: "uniform",
   chunkDelayMs: 40,
   errorStatus: 0,
   errorRate: 0,
@@ -21,5 +25,6 @@ export const BUILTIN_PRESETS = [
   { name: "高缓存命中", patch: { ...base, promptMode: "fixed", promptTokens: 1000, cacheMode: "ratio", cacheRatio: 0.8 } },
   { name: "超长上下文", patch: { ...base, promptMode: "fixed", promptTokens: 210000, completionTokens: 500 } },
   { name: "超长输出", patch: { ...base, completionTokens: 3000000, chunkDelayMs: 2 } },
+  { name: "长延迟", patch: { ...base, latencyMode: "range", latencyMin: 3000, latencyMax: 10000, latencyDist: "normal" } },
   { name: "错误超时", patch: { ...base, errorStatus: 429, errorRate: 100, errorMessage: "mock injected 429 (rate limit)" } },
 ];
