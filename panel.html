@@ -15,6 +15,10 @@
     --fg:#dfe1e5; --mut:#8b8f97;
     --accent:#3574f0; --accent-ink:#ffffff; --accent-soft:rgba(53,116,240,.14); --accent-fg:#7aa4f7;
     --ok:#499c54; --warn:#d4a02b; --err:#db5c5c; --gemini:#a177f4;
+    --v-openai:#10a37f; --v-claude:#d97757; --v-gemini:#a177f4; --v-deepseek:#1e88e5;
+    --v-kimi:#8bc34a; --v-glm:#26c6da; --v-qwen:#e8a33d; --v-hunyuan:#7986cb;
+    --v-mistral:#fa520f; --v-grok:#c9cdd3; --v-llama:#96786c; --v-minimax:#e73562; --v-ernie:#fbc02d;
+    --v-mimo:#8d97a5;
     --radius:5px;
   }
   * { box-sizing:border-box; }
@@ -86,8 +90,17 @@
   .mrow:hover { background:var(--panel-2); }
   .mrow.active { background:var(--accent-soft); box-shadow:inset 2px 0 0 var(--accent); }
   .mrow .name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .fmt-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
-  .fmt-dot.openai { background:var(--accent-fg); } .fmt-dot.claude { background:var(--warn); } .fmt-dot.gemini { background:var(--gemini); }
+  .vendor-icon { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; flex-shrink:0; color:var(--mut); }
+  .vendor-icon svg { width:14px; height:14px; }
+  .vendor-icon.openai { color:var(--v-openai); } .vendor-icon.claude { color:var(--v-claude); } .vendor-icon.gemini { color:var(--v-gemini); }
+  .vendor-icon.deepseek { color:var(--v-deepseek); } .vendor-icon.kimi { color:var(--v-kimi); } .vendor-icon.glm { color:var(--v-glm); }
+  .vendor-icon.qwen { color:var(--v-qwen); } .vendor-icon.hunyuan { color:var(--v-hunyuan); } .vendor-icon.mistral { color:var(--v-mistral); }
+  .vendor-icon.grok { color:var(--v-grok); } .vendor-icon.llama { color:var(--v-llama); } .vendor-icon.minimax { color:var(--v-minimax); }
+  .vendor-icon.ernie { color:var(--v-ernie); }
+  .vendor-icon.mimo { color:var(--v-mimo); }
+  .vendor-icon.custom-openai { color:var(--v-openai); } .vendor-icon.custom-claude { color:var(--v-claude); } .vendor-icon.custom-gemini { color:var(--v-gemini); }
+  .vendor-picker { display:flex; align-items:center; gap:8px; }
+  .vendor-picker select { flex:1; min-width:0; }
   .fmt { font-size:10px; padding:1px 6px; border-radius:3px; font-weight:600; }
   .fmt.openai { background:rgba(53,116,240,.15); color:var(--accent-fg); }
   .fmt.claude { background:rgba(212,160,43,.15); color:var(--warn); }
@@ -97,6 +110,14 @@
   .card { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:14px; }
   .card h2 { font-size:12.5px; margin:0 0 3px; color:var(--fg); font-weight:600; }
   .card .card-sub { color:var(--mut); font-size:11px; margin:0 0 14px; font-weight:400; }
+  .hint code, .card-sub code { background:var(--floor); border:1px solid var(--border-soft); border-radius:3px; padding:1px 5px; color:var(--accent-fg); font-size:11px; }
+  .tutorial-step { display:flex; gap:12px; padding:14px 0; border-top:1px solid var(--border-soft); }
+  .tutorial-step:first-of-type { border-top:none; padding-top:4px; }
+  .tutorial-step-num { width:22px; height:22px; border-radius:50%; background:var(--accent-soft); color:var(--accent-fg);
+    display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; flex-shrink:0; }
+  .tutorial-step-title { font-size:12.5px; font-weight:600; color:var(--fg); margin-bottom:4px; }
+  .tutorial-code { background:var(--floor); border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px;
+    font-size:11.5px; color:var(--accent-fg); overflow:auto; margin:8px 0 0; white-space:pre; font-family:inherit; }
 
   /* ---------- editor-style tabs ---------- */
   .tabbar { display:flex; background:var(--panel); border-bottom:1px solid var(--border); flex-shrink:0; }
@@ -170,7 +191,7 @@
   <div class="side">
     <div class="panel-title">Project</div>
     <div class="sidebtns">
-      <button class="sm primary" @click="addModel()">+ New</button>
+      <button class="sm primary" @click="openNewModelDialog()">+ New</button>
       <button class="sm" @click="dupModel()" :disabled="!sel">Copy</button>
       <button class="sm danger" @click="delModel()" :disabled="!sel">Delete</button>
     </div>
@@ -179,7 +200,7 @@
       <div class="mgroup">
         <div class="mgroup-head" @click="toggleGroup(group.vendor)">
           <span class="mgroup-arrow" x-text="collapsedGroups[group.vendor] ? '▸' : '▾'"></span>
-          <span class="fmt-dot" :class="group.format"></span>
+          <span class="vendor-icon" :class="group.vendor" x-html="vendorIcon(group.vendor)"></span>
           <span x-text="VENDOR_LABELS[group.vendor] || group.vendor"></span>
           <span class="mgroup-count" x-text="group.items.length"></span>
         </div>
@@ -200,6 +221,7 @@
   <!-- 右：Tab + 内容 -->
   <div class="main">
     <div class="tabbar">
+      <button :class="{active: tab==='tutorial'}" @click="tab='tutorial'">Tutorial</button>
       <button :class="{active: tab==='models'}" @click="tab='models'">Models</button>
       <button :class="{active: tab==='presets'}" @click="tab='presets'">Presets</button>
       <button :class="{active: tab==='recent'}" @click="tab='recent'">Recent Requests</button>
@@ -210,6 +232,63 @@
       <div class="warnbar" x-show="!auth.passwordSet">
         <b>No password set.</b> 任何能访问这个页面的人都可以修改所有配置。要给局域网/公网同事用之前，先去 Network &amp; Security 设一个。
       </div>
+
+      <!-- ===== tutorial ===== -->
+      <template x-if="tab==='tutorial'">
+        <div class="card">
+          <h2>New-API 界面配置教程</h2>
+          <div class="card-sub">在 new-api 的浏览器管理后台里，按顺序做完这 5 步，就能把这个 mock 当真实上游用。</div>
+
+          <div class="tutorial-step">
+            <div class="tutorial-step-num">1</div>
+            <div class="tutorial-step-body">
+              <div class="tutorial-step-title">登录 new-api 后台</div>
+              <div class="hint" style="margin-top:0">浏览器打开 new-api 前端，用 <code>root</code> 账号 + 首次启动时生成的密码登录。</div>
+            </div>
+          </div>
+
+          <div class="tutorial-step">
+            <div class="tutorial-step-num">2</div>
+            <div class="tutorial-step-body">
+              <div class="tutorial-step-title">建渠道（Channels）</div>
+              <div class="hint" style="margin-top:0">
+                类型选 <b>OpenAI</b>；代理 / Base URL 填 <b>Network &amp; Security</b> 标签页里对应的一条（本机 / Docker / 局域网 / 公网，看 new-api 部署在哪）；
+                密钥随便填，比如 <code>sk-mock</code>；模型列表填 <code>gpt-3.5-turbo,gpt-4o</code>（或你在 Models 标签页建的模型名）。
+                保存后点「测试」，mock 的 <code>/v1/models</code> 会响应。
+              </div>
+            </div>
+          </div>
+
+          <div class="tutorial-step">
+            <div class="tutorial-step-num">3</div>
+            <div class="tutorial-step-body">
+              <div class="tutorial-step-title">配模型倍率</div>
+              <div class="hint" style="margin-top:0">运营设置 / 模型倍率里，确保渠道里填的每个模型名都配了对应倍率，不然计费算不出来。</div>
+            </div>
+          </div>
+
+          <div class="tutorial-step">
+            <div class="tutorial-step-num">4</div>
+            <div class="tutorial-step-body">
+              <div class="tutorial-step-title">建令牌（Tokens）</div>
+              <div class="hint" style="margin-top:0">新建一个令牌，复制出 <code>sk-xxx</code>——发请求时带 <code>Authorization: Bearer sk-xxx</code> 用的就是它。</div>
+            </div>
+          </div>
+
+          <div class="tutorial-step">
+            <div class="tutorial-step-num">5</div>
+            <div class="tutorial-step-body">
+              <div class="tutorial-step-title">修改 TierGroups（按需分层，可选）</div>
+              <div class="hint" style="margin-top:0">系统设置 → 倍率设置 → TierGroups：</div>
+              <pre class="tutorial-code">{
+  "dev": {"groups": ["default"]},
+  "pro": {"groups": ["default", "vip"]},
+  "ent": {"groups": ["default", "vip", "svip"]}
+}</pre>
+            </div>
+          </div>
+        </div>
+      </template>
 
       <!-- ===== models ===== -->
       <template x-if="tab==='models'">
@@ -229,11 +308,14 @@
             <div class="card-sub" x-text="sel ? sel.id : ''"></div>
             <div class="row"><label>模型名 id</label><input x-model="sel.id" /></div>
             <div class="row"><label>厂商</label>
-              <select x-model="sel.vendor">
-                <template x-for="v in VENDOR_ORDER" :key="v">
-                  <option :value="v" x-text="VENDOR_LABELS[v]"></option>
-                </template>
-              </select>
+              <div class="vendor-picker">
+                <span class="vendor-icon" :class="sel.vendor" x-html="vendorIcon(sel.vendor)"></span>
+                <select x-model="sel.vendor">
+                  <template x-for="v in VENDOR_ORDER" :key="v">
+                    <option :value="v" x-text="VENDOR_LABELS[v]"></option>
+                  </template>
+                </select>
+              </div>
             </div>
             <div class="hint" style="margin:-4px 0 10px">决定协议格式（<span x-text="VENDOR_FORMAT_MAP[sel.vendor]"></span>），不确定选哪个厂商就用「自定义」——按你实际要模拟的协议选。</div>
             <div class="row"><label>回复内容</label><textarea x-model="sel.content"></textarea></div>
@@ -263,9 +345,23 @@
             </div>
             <div class="row"><label>错误信息</label><input x-model="sel.errorMessage" /></div>
             <div class="btns"><button class="primary" @click="saveModel()">Save</button></div>
-            <div class="field-label">调用路径</div>
-            <div class="ep"><code x-text="endpointHint()"></code></div>
-            <div class="hint">Base URL（域名+端口）的完整清单——本机 / Docker / 局域网 / 公网四种——见 Network &amp; Security 标签页。</div>
+
+            <div class="field-label">调用路径 — 本机本地</div>
+            <div class="ep"><code x-text="endpointFor('http://localhost:' + port)"></code><button class="sm" @click="copy(endpointFor('http://localhost:' + port))">Copy</button></div>
+
+            <div class="field-label">调用路径 — 本机 Docker</div>
+            <div class="ep"><code x-text="endpointFor('http://host.docker.internal:' + port)"></code><button class="sm" @click="copy(endpointFor('http://host.docker.internal:' + port))">Copy</button></div>
+
+            <div class="field-label">调用路径 — 局域网</div>
+            <template x-for="ip in lanIps" :key="ip">
+              <div class="ep"><code x-text="endpointFor('http://' + ip + ':' + port)"></code><button class="sm" @click="copy(endpointFor('http://' + ip + ':' + port))">Copy</button></div>
+            </template>
+            <div class="hint" x-show="!lanIps.length" style="margin:0">没探测到局域网网卡地址，可能只有回环网卡</div>
+
+            <div class="field-label">调用路径 — 公网</div>
+            <div class="ep"><code x-text="endpointFor('http://&lt;你的公网地址或域名&gt;:' + port)"></code></div>
+
+            <div class="hint">容器场景记得选「本机 Docker」那条，不要给容器里的 new-api 填 localhost。</div>
           </div>
         </div>
       </template>
@@ -441,6 +537,33 @@
   </div>
 </div>
 
+<div class="confirm-overlay" x-show="newModelState.open" x-cloak @keydown.escape.window="newModelState.open=false">
+  <div class="confirm-box" style="width:360px">
+    <div class="confirm-titlebar">New Model</div>
+    <div class="confirm-body">
+      <div class="row" style="grid-template-columns:64px 1fr">
+        <label>厂商</label>
+        <div class="vendor-picker">
+          <span class="vendor-icon" :class="newModelState.vendor" x-html="vendorIcon(newModelState.vendor)"></span>
+          <select x-model="newModelState.vendor">
+            <template x-for="v in VENDOR_ORDER" :key="v">
+              <option :value="v" x-text="VENDOR_LABELS[v]"></option>
+            </template>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="grid-template-columns:64px 1fr; margin-bottom:0">
+        <label>名称</label>
+        <input x-ref="newIdInput" x-model="newModelState.id" placeholder="例如 deepseek-v4-flash" @keydown.enter="confirmNewModel()" />
+      </div>
+    </div>
+    <div class="confirm-actions">
+      <button @click="newModelState.open=false">Cancel</button>
+      <button class="primary" @click="confirmNewModel()">Create</button>
+    </div>
+  </div>
+</div>
+
 <script>
 function app() {
   return {
@@ -469,17 +592,44 @@ function app() {
       openai:"openai", claude:"claude", gemini:"gemini",
       deepseek:"openai", kimi:"openai", glm:"openai", qwen:"openai",
       hunyuan:"openai", mistral:"openai", grok:"openai", llama:"openai",
-      minimax:"openai", ernie:"openai",
+      minimax:"openai", ernie:"openai", mimo:"openai",
       "custom-openai":"openai", "custom-gemini":"gemini", "custom-claude":"claude",
     },
     VENDOR_LABELS: {
       openai:"OpenAI", claude:"Claude", gemini:"Gemini",
       deepseek:"DeepSeek", kimi:"Kimi", glm:"GLM", qwen:"Qwen",
       hunyuan:"Hunyuan", mistral:"Mistral", grok:"Grok", llama:"Llama",
-      minimax:"MiniMax", ernie:"Ernie",
+      minimax:"MiniMax", ernie:"Ernie", mimo:"MiMo",
       "custom-openai":"自定义（ChatGPT 格式）", "custom-gemini":"自定义（Gemini 格式）", "custom-claude":"自定义（Claude 格式）",
     },
-    VENDOR_ORDER: ["openai","claude","gemini","deepseek","kimi","glm","qwen","hunyuan","mistral","grok","llama","minimax","ernie","custom-openai","custom-gemini","custom-claude"],
+    VENDOR_ORDER: ["openai","claude","gemini","deepseek","kimi","glm","qwen","hunyuan","mistral","grok","llama","minimax","ernie","mimo","custom-openai","custom-gemini","custom-claude"],
+    // 厂商图标: claude/gemini/deepseek/qwen/mistral/llama/minimax/ernie/kimi 来自 Simple Icons(CC0);
+    // openai/grok/glm/hunyuan 官方没有 CC0 图标,取自其品牌页/公开品牌指南(仅用于在本产品里代表该品牌，非再分发)。
+    // mimo(小米) 用 Simple Icons 的 Xiaomi 图标(CC0)代表 —— MiMo 是小米的大模型子品牌，本身没有独立 logo。
+    // custom-* 用统一的通用方块图标兜底 —— 不瞎凑不存在的品牌 logo。
+    VENDOR_ICON_SVG: {
+      claude: "<path fill=\"currentColor\" d=\"M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z\"/>",
+      gemini: "<path fill=\"currentColor\" d=\"M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81\"/>",
+      deepseek: "<path fill=\"currentColor\" d=\"M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45\"/>",
+      qwen: "<path fill=\"currentColor\" d=\"M23.919 14.545 20.817 9.17l1.47-2.544a.56.56 0 0 0 0-.566l-1.633-2.83a.57.57 0 0 0-.49-.283h-6.207L12.487.402a.57.57 0 0 0-.49-.284H8.732a.56.56 0 0 0-.49.284L5.139 5.775h-2.94a.56.56 0 0 0-.49.284L.077 8.887a.56.56 0 0 0 0 .567L3.18 14.83l-1.47 2.545a.56.56 0 0 0 0 .566l1.634 2.83a.57.57 0 0 0 .49.283h6.205l1.47 2.545a.57.57 0 0 0 .49.284h3.266a.57.57 0 0 0 .49-.284l3.104-5.375h2.94a.57.57 0 0 0 .49-.283l1.634-2.828a.55.55 0 0 0-.004-.568M8.733.686l1.634 2.828-1.634 2.828H21.8L20.164 9.17H7.425L5.63 6.06Zm1.306 19.801-6.205-.002 1.634-2.83h3.265L2.201 6.344h3.267q3.182 5.517 6.367 11.032zm10.124-5.66L18.53 12l-6.532 11.315-1.634-2.83c2.129-3.673 4.25-7.351 6.373-11.028h3.592l3.102 5.374z\"/>",
+      mistral: "<path fill=\"currentColor\" d=\"M17.143 3.429v3.428h-3.429v3.429h-3.428V6.857H6.857V3.43H3.43v13.714H0v3.428h10.286v-3.428H6.857v-3.429h3.429v3.429h3.429v-3.429h3.428v3.429h-3.428v3.428H24v-3.428h-3.43V3.429z\"/>",
+      llama: "<path fill=\"currentColor\" d=\"M6.915 4.03c-1.968 0-3.683 1.28-4.871 3.113C.704 9.208 0 11.883 0 14.449c0 .706.07 1.369.21 1.973a6.624 6.624 0 0 0 .265.86 5.297 5.297 0 0 0 .371.761c.696 1.159 1.818 1.927 3.593 1.927 1.497 0 2.633-.671 3.965-2.444.76-1.012 1.144-1.626 2.663-4.32l.756-1.339.186-.325c.061.1.121.196.183.3l2.152 3.595c.724 1.21 1.665 2.556 2.47 3.314 1.046.987 1.992 1.22 3.06 1.22 1.075 0 1.876-.355 2.455-.843a3.743 3.743 0 0 0 .81-.973c.542-.939.861-2.127.861-3.745 0-2.72-.681-5.357-2.084-7.45-1.282-1.912-2.957-2.93-4.716-2.93-1.047 0-2.088.467-3.053 1.308-.652.57-1.257 1.29-1.82 2.05-.69-.875-1.335-1.547-1.958-2.056-1.182-.966-2.315-1.303-3.454-1.303zm10.16 2.053c1.147 0 2.188.758 2.992 1.999 1.132 1.748 1.647 4.195 1.647 6.4 0 1.548-.368 2.9-1.839 2.9-.58 0-1.027-.23-1.664-1.004-.496-.601-1.343-1.878-2.832-4.358l-.617-1.028a44.908 44.908 0 0 0-1.255-1.98c.07-.109.141-.224.211-.327 1.12-1.667 2.118-2.602 3.358-2.602zm-10.201.553c1.265 0 2.058.791 2.675 1.446.307.327.737.871 1.234 1.579l-1.02 1.566c-.757 1.163-1.882 3.017-2.837 4.338-1.191 1.649-1.81 1.817-2.486 1.817-.524 0-1.038-.237-1.383-.794-.263-.426-.464-1.13-.464-2.046 0-2.221.63-4.535 1.66-6.088.454-.687.964-1.226 1.533-1.533a2.264 2.264 0 0 1 1.088-.285z\"/>",
+      minimax: "<path fill=\"currentColor\" d=\"M11.43 3.92a.86.86 0 1 0-1.718 0v14.236a1.999 1.999 0 0 1-3.997 0V9.022a.86.86 0 1 0-1.718 0v3.87a1.999 1.999 0 0 1-3.997 0V11.49a.57.57 0 0 1 1.139 0v1.404a.86.86 0 0 0 1.719 0V9.022a1.999 1.999 0 0 1 3.997 0v9.134a.86.86 0 0 0 1.719 0V3.92a1.998 1.998 0 1 1 3.996 0v11.788a.57.57 0 1 1-1.139 0zm10.572 3.105a2 2 0 0 0-1.999 1.997v7.63a.86.86 0 0 1-1.718 0V3.923a1.999 1.999 0 0 0-3.997 0v16.16a.86.86 0 0 1-1.719 0V18.08a.57.57 0 1 0-1.138 0v2a1.998 1.998 0 0 0 3.996 0V3.92a.86.86 0 0 1 1.719 0v12.73a1.999 1.999 0 0 0 3.996 0V9.023a.86.86 0 1 1 1.72 0v6.686a.57.57 0 0 0 1.138 0V9.022a2 2 0 0 0-1.998-1.997\"/>",
+      ernie: "<path fill=\"currentColor\" d=\"M9.154 0C7.71 0 6.54 1.658 6.54 3.707c0 2.051 1.171 3.71 2.615 3.71 1.446 0 2.614-1.659 2.614-3.71C11.768 1.658 10.6 0 9.154 0zm7.025.594C14.86.58 13.347 2.589 13.2 3.927c-.187 1.745.25 3.487 2.179 3.735 1.933.25 3.175-1.806 3.422-3.364.252-1.555-.995-3.364-2.362-3.674a1.218 1.218 0 0 0-.261-.03zM3.582 5.535a2.811 2.811 0 0 0-.156.008c-2.118.19-2.428 3.24-2.428 3.24-.287 1.41.686 4.425 3.297 3.864 2.617-.561 2.262-3.68 2.183-4.362-.125-1.018-1.292-2.773-2.896-2.75zm16.534 1.753c-2.308 0-2.617 2.119-2.617 3.616 0 1.43.121 3.425 2.988 3.362 2.867-.063 2.553-3.238 2.553-3.988 0-.745-.62-2.99-2.924-2.99zm-8.264 2.478c-1.424.014-2.708.925-3.323 1.947-1.118 1.868-2.863 3.05-3.112 3.363-.25.309-3.61 2.116-2.864 5.42.746 3.301 3.365 3.237 3.365 3.237s1.93.19 4.171-.31c2.24-.495 4.17.123 4.17.123s5.233 1.748 6.665-1.616c1.43-3.364-.808-5.109-.808-5.109s-2.99-2.306-4.736-4.798c-1.072-1.665-2.348-2.268-3.528-2.257zm-2.234 3.84l1.542.024v8.197H7.758c-1.47-.291-2.055-1.292-2.13-1.462-.072-.173-.488-.976-.268-2.343.635-2.049 2.447-2.196 2.447-2.196h1.81zm3.964 2.39v3.881c.096.413.612.488.612.488h1.614v-4.343h1.689v5.782h-3.915c-1.517-.39-1.59-1.465-1.59-1.465v-4.317zm-5.458 1.147c-.66.197-.978.708-1.05.928-.076.22-.247.78-.1 1.269.294 1.095 1.248 1.144 1.248 1.144h1.37v-3.34z\"/>",
+      kimi: "<path fill=\"currentColor\" d=\"M21.765.351C22.998.351 24 1.353 24 2.586S22.998 4.82 21.765 4.82h-1.974c-.15 0-.26-.12-.26-.26V2.586A2.237 2.237 0 0 1 21.765.35M9.41 13.388l8.447-8.377c.16-.16.07-.471-.14-.471h-4.55s-.1.02-.14.06l-9.099 9.029c-.14.14-.35.02-.35-.21V4.81c0-.15-.1-.27-.221-.27H.22c-.12 0-.22.12-.22.27v18.57c0 .15.1.27.22.27h3.137c.12 0 .22-.12.22-.27v-3.79c0-.08.03-.16.08-.21l2.826-2.796c.07-.07.16-.08.241-.03l7.546 5.551a8.9 8.9 0 0 0 4.018 1.493c.12.01.23-.11.23-.27V19.76c0-.14-.08-.25-.19-.26a5.8 5.8 0 0 1-2.355-.942l-6.533-4.73c-.14-.09-.15-.32-.03-.441\"/>",
+      openai: "<path fill=\"currentColor\" d=\"M37.5324 16.8707C37.9808 15.5241 38.1363 14.0974 37.9886 12.6859C37.8409 11.2744 37.3934 9.91076 36.676 8.68622C35.6126 6.83404 33.9882 5.3676 32.0373 4.4985C30.0864 3.62941 27.9098 3.40259 25.8215 3.85078C24.8796 2.7893 23.7219 1.94125 22.4257 1.36341C21.1295 0.785575 19.7249 0.491269 18.3058 0.500197C16.1708 0.495044 14.0893 1.16803 12.3614 2.42214C10.6335 3.67624 9.34853 5.44666 8.6917 7.47815C7.30085 7.76286 5.98686 8.3414 4.8377 9.17505C3.68854 10.0087 2.73073 11.0782 2.02839 12.312C0.956464 14.1591 0.498905 16.2988 0.721698 18.4228C0.944492 20.5467 1.83612 22.5449 3.268 24.1293C2.81966 25.4759 2.66413 26.9026 2.81182 28.3141C2.95951 29.7256 3.40701 31.0892 4.12437 32.3138C5.18791 34.1659 6.8123 35.6322 8.76321 36.5013C10.7141 37.3704 12.8907 37.5973 14.9789 37.1492C15.9208 38.2107 17.0786 39.0587 18.3747 39.6366C19.6709 40.2144 21.0755 40.5087 22.4946 40.4998C24.6307 40.5054 26.7133 39.8321 28.4418 38.5772C30.1704 37.3223 31.4556 35.5506 32.1119 33.5179C33.5027 33.2332 34.8167 32.6547 35.9659 31.821C37.115 30.9874 38.0728 29.9178 38.7752 28.684C39.8458 26.8371 40.3023 24.6979 40.0789 22.5748C39.8556 20.4517 38.9639 18.4544 37.5324 16.8707ZM22.4978 37.8849C20.7443 37.8874 19.0459 37.2733 17.6994 36.1501C17.7601 36.117 17.8666 36.0586 17.936 36.0161L25.9004 31.4156C26.1003 31.3019 26.2663 31.137 26.3813 30.9378C26.4964 30.7386 26.5563 30.5124 26.5549 30.2825V19.0542L29.9213 20.998C29.9389 21.0068 29.9541 21.0198 29.9656 21.0359C29.977 21.052 29.9842 21.0707 29.9867 21.0902V30.3889C29.9842 32.375 29.1946 34.2791 27.7909 35.6841C26.3872 37.0892 24.4838 37.8806 22.4978 37.8849ZM6.39227 31.0064C5.51397 29.4888 5.19742 27.7107 5.49804 25.9832C5.55718 26.0187 5.66048 26.0818 5.73461 26.1244L13.699 30.7248C13.8975 30.8408 14.1233 30.902 14.3532 30.902C14.583 30.902 14.8088 30.8408 15.0073 30.7248L24.731 25.1103V28.9979C24.7321 29.0177 24.7283 29.0376 24.7199 29.0556C24.7115 29.0736 24.6988 29.0893 24.6829 29.1012L16.6317 33.7497C14.9096 34.7416 12.8643 35.0097 10.9447 34.4954C9.02506 33.9811 7.38785 32.7263 6.39227 31.0064ZM4.29707 13.6194C5.17156 12.0998 6.55279 10.9364 8.19885 10.3327C8.19885 10.4013 8.19491 10.5228 8.19491 10.6071V19.808C8.19351 20.0378 8.25334 20.2638 8.36823 20.4629C8.48312 20.6619 8.64893 20.8267 8.84863 20.9404L18.5723 26.5542L15.206 28.4979C15.1894 28.5089 15.1703 28.5155 15.1505 28.5173C15.1307 28.5191 15.1107 28.516 15.0924 28.5082L7.04046 23.8557C5.32135 22.8601 4.06716 21.2235 3.55289 19.3046C3.03862 17.3858 3.30624 15.3413 4.29707 13.6194ZM31.955 20.0556L22.2312 14.4411L25.5976 12.4981C25.6142 12.4872 25.6333 12.4805 25.6531 12.4787C25.6729 12.4769 25.6928 12.4801 25.7111 12.4879L33.7631 17.1364C34.9967 17.849 36.0017 18.8982 36.6606 20.1613C37.3194 21.4244 37.6047 22.849 37.4832 24.2684C37.3617 25.6878 36.8382 27.0432 35.9743 28.1759C35.1103 29.3086 33.9415 30.1717 32.6047 30.6641C32.6047 30.5947 32.6047 30.4733 32.6047 30.3889V21.188C32.6066 20.9586 32.5474 20.7328 32.4332 20.5338C32.319 20.3348 32.154 20.1698 31.955 20.0556ZM35.3055 15.0128C35.2464 14.9765 35.1431 14.9142 35.069 14.8717L27.1045 10.2712C26.906 10.1554 26.6803 10.0943 26.4504 10.0943C26.2206 10.0943 25.9948 10.1554 25.7963 10.2712L16.0726 15.8858V11.9982C16.0715 11.9783 16.0753 11.9585 16.0837 11.9405C16.0921 11.9225 16.1048 11.9068 16.1207 11.8949L24.1719 7.25025C25.4053 6.53903 26.8158 6.19376 28.2383 6.25482C29.6608 6.31589 31.0364 6.78077 32.2044 7.59508C33.3723 8.40939 34.2842 9.53945 34.8334 10.8531C35.3826 12.1667 35.5464 13.6095 35.3055 15.0128ZM14.2424 21.9419L10.8752 19.9981C10.8576 19.9893 10.8423 19.9763 10.8309 19.9602C10.8195 19.9441 10.8122 19.9254 10.8098 19.9058V10.6071C10.8107 9.18295 11.2173 7.78848 11.9819 6.58696C12.7466 5.38544 13.8377 4.42659 15.1275 3.82264C16.4173 3.21869 17.8524 2.99464 19.2649 3.1767C20.6775 3.35876 22.0089 3.93941 23.1034 4.85067C23.0427 4.88379 22.937 4.94215 22.8668 4.98473L14.9024 9.58517C14.7025 9.69878 14.5366 9.86356 14.4215 10.0626C14.3065 10.2616 14.2466 10.4877 14.2479 10.7175L14.2424 21.9419ZM16.071 17.9991L20.4018 15.4978L24.7325 17.9975V22.9985L20.4018 25.4983L16.071 22.9985V17.9991Z\"/>",
+      grok: "<path fill=\"currentColor\" d=\"M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815\"/>",
+      glm: "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M9.917 2c4.906 0 10.178 3.947 8.93 10.58-.014.07-.037.14-.057.21l-.003-.277c-.083-3-1.534-8.934-8.87-8.934-3.393 0-8.137 3.054-7.93 8.158-.04 4.778 3.555 8.4 7.95 8.332l.073-.001c1.2-.033 2.763-.429 3.1-1.657.063-.031.26.534.268.598.048.256.112.369.192.34.981-.348 2.286-1.222 1.952-2.38-.176-.61-1.775-.147-1.921-.347.418-.979 2.234-.926 3.153-.716.443.102.657.38 1.012.442.29.052.981-.2.96.242-1.5 3.042-4.893 5.41-8.808 5.41C3.654 22 0 16.574 0 11.737 0 5.947 4.959 2 9.917 2zM9.9 5.3c.484 0 1.125.225 1.38.585 3.669.145 4.313 2.686 4.694 5.444.255 1.838.315 2.3.182 1.387l.083.59c.068.448.554.737.982.516.144-.075.254-.231.328-.47a.2.2 0 01.258-.13l.625.22a.2.2 0 01.124.238 2.172 2.172 0 01-.51.92c-.878.917-2.757.664-3.08-.62-.14-.554-.055-.626-.345-1.242-.292-.621-1.238-.709-1.69-.295-.345.315-.407.805-.406 1.282L12.6 15.9a.9.9 0 01-.9.9h-1.4a.9.9 0 01-.9-.9v-.65a1.15 1.15 0 10-2.3 0v.65a.9.9 0 01-.9.9H4.8a.9.9 0 01-.9-.9l.035-3.239c.012-1.884.356-3.658 2.47-4.134.2-.045.252.13.29.342.025.154.043.252.053.294.701 3.058 1.75 4.299 3.144 3.722l.66-.331.254-.13c.158-.082.25-.131.276-.15.012-.01-.165-.206-.407-.464l-1.012-1.067a8.925 8.925 0 01-.199-.216c-.047-.034-.116.068-.208.306-.074.157-.251.252-.272.326-.013.058.108.298.362.72.164.288.22.508-.31.343-1.04-.8-1.518-2.273-1.684-3.725-.004-.035-.162-1.913-.162-1.913a1.2 1.2 0 011.113-1.281L9.9 5.3z\"/>",
+      hunyuan: "<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M12 0c6.627 0 12 5.373 12 12s-5.373 12-12 12S0 18.627 0 12 5.373 0 12 0zm1.652 1.123l-.01-.001c.533.097 1.023.233 1.41.404 6.084 2.683 7.396 9.214 1.601 14.338a3.781 3.781 0 01-5.337-.328 3.654 3.654 0 01-.884-3.044c-1.934.6-3.295 2.305-3.524 4.45-.204 1.912.324 4.044 2.056 5.634l.245.067C10.1 22.876 11.036 23 12 23c6.075 0 11-4.925 11-11 0-5.513-4.056-10.08-9.348-10.877zM2.748 6.21c-.178.269-.348.536-.51.803l-.235.394.078-.167A10.957 10.957 0 001 12c0 4.919 3.228 9.083 7.682 10.49l.214.065C3.523 18.528 2.84 14.149 6.47 8.68A2.234 2.234 0 102.748 6.21zm10.157-5.172c4.408 1.33 3.61 5.41 2.447 6.924-.86 1.117-2.922 1.46-3.708 2.238-.666.657-1.077 1.462-1.212 2.291A5.303 5.303 0 0112 12.258a5.672 5.672 0 001.404-11.169 10.51 10.51 0 00-.5-.052z\"/>",
+      mimo: "<path fill=\"currentColor\" d=\"M12 0C8.016 0 4.756.255 2.493 2.516.23 4.776 0 8.033 0 12.012c0 3.98.23 7.235 2.494 9.497C4.757 23.77 8.017 24 12 24c3.983 0 7.243-.23 9.506-2.491C23.77 19.247 24 15.99 24 12.012c0-3.984-.233-7.243-2.502-9.504C19.234.252 15.978 0 12 0zM4.906 7.405h5.624c1.47 0 3.007.068 3.764.827.746.746.827 2.233.83 3.676v4.54a.15.15 0 0 1-.152.147h-1.947a.15.15 0 0 1-.152-.148V11.83c-.002-.806-.048-1.634-.464-2.051-.358-.36-1.026-.441-1.72-.458H7.158a.15.15 0 0 0-.151.147v6.98a.15.15 0 0 1-.152.148H4.906a.15.15 0 0 1-.15-.148V7.554a.15.15 0 0 1 .15-.149zm12.131 0h1.949a.15.15 0 0 1 .15.15v8.892a.15.15 0 0 1-.15.148h-1.949a.15.15 0 0 1-.151-.148V7.554a.15.15 0 0 1 .151-.149zM8.92 10.948h2.046c.083 0 .15.066.15.147v5.352a.15.15 0 0 1-.15.148H8.92a.15.15 0 0 1-.152-.148v-5.352a.15.15 0 0 1 .152-.147Z\"/>",
+    },
+    VENDOR_ICON_VB: { openai: "0 0 41 41" },
+    vendorIcon(vendor) {
+      const p = this.VENDOR_ICON_SVG[vendor];
+      if (p) return '<svg viewBox="' + (this.VENDOR_ICON_VB[vendor] || "0 0 24 24") + '">' + p + '</svg>';
+      return '<svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="9" y="9" width="6" height="6" fill="currentColor"/></svg>';
+    },
+    newModelState: { open:false, vendor:"custom-openai", id:"" },
     auth: { passwordSet:false, authenticated:false, trustedByIp:true,
             lan:{mode:"allow-all",list:null}, public:{mode:"whitelist",list:null} },
     authForm: { password:"", lan:{mode:"allow-all",list:""}, public:{mode:"whitelist",list:""} },
@@ -493,7 +643,7 @@ function app() {
       window.addEventListener("keydown", (e) => {
         if (this.confirmState.open) return; // Escape 由 @keydown.escape.window 处理
         if (["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName)) return;
-        const map = { "1":"models", "2":"presets", "3":"recent", "4":"network" };
+        const map = { "1":"tutorial", "2":"models", "3":"presets", "4":"recent", "5":"network" };
         if (map[e.key]) this.tab = map[e.key];
       });
     },
@@ -551,11 +701,18 @@ function app() {
       if (r.ok) { const {model} = await r.json(); await this.loadState(); this.select(model.id); this.toast("已保存并生效"); }
       else this.toast("保存失败", false);
     },
-    async addModel() {
-      const base = { id: "new-model-" + (this.models.length+1), vendor:"custom-openai", content:"mock 回复",
+    openNewModelDialog() {
+      this.newModelState = { open:true, vendor:"custom-openai", id:"" };
+      this.$nextTick(() => this.$refs.newIdInput && this.$refs.newIdInput.focus());
+    },
+    async confirmNewModel() {
+      const id = this.newModelState.id.trim();
+      if (!id) { this.toast("请输入模型名称", false); return; }
+      const base = { id, vendor: this.newModelState.vendor, content:"mock 回复",
         promptMode:"auto", promptTokens:100, completionTokens:30, cacheMode:"none", cacheRatio:0.5,
         cachedTokens:0, cacheCreationTokens:0, latencyMs:0, chunkDelayMs:40, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
       await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(base) });
+      this.newModelState.open = false;
       await this.loadState(); this.select(base.id); this.toast("已新建模型");
     },
     async dupModel() {
@@ -598,12 +755,12 @@ function app() {
       if (this.editingPreset === name) this.editingPreset = "";
       await this.loadState(); this.toast("预设已删除");
     },
-    endpointHint() {
+    endpointFor(base) {
       if (!this.sel) return "";
       const fmt = this.VENDOR_FORMAT_MAP[this.sel.vendor] || "openai";
-      if (fmt === "openai") return "POST " + this.origin + "/v1/chat/completions";
-      if (fmt === "claude") return "POST " + this.origin + "/v1/messages";
-      return "POST " + this.origin + "/v1beta/models/" + this.sel.id + ":generateContent";
+      if (fmt === "openai") return "POST " + base + "/v1/chat/completions";
+      if (fmt === "claude") return "POST " + base + "/v1/messages";
+      return "POST " + base + "/v1beta/models/" + this.sel.id + ":generateContent";
     },
     copy(t) { navigator.clipboard?.writeText(t); this.toast("已复制"); },
     async savePassword() {

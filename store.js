@@ -33,7 +33,7 @@ export const VENDOR_FORMAT_MAP = {
   openai: "openai", claude: "claude", gemini: "gemini",
   deepseek: "openai", kimi: "openai", glm: "openai", qwen: "openai",
   hunyuan: "openai", mistral: "openai", grok: "openai", llama: "openai",
-  minimax: "openai", ernie: "openai",
+  minimax: "openai", ernie: "openai", mimo: "openai",
   "custom-openai": "openai", "custom-gemini": "gemini", "custom-claude": "claude",
 };
 
@@ -60,7 +60,7 @@ const DEFAULT_MODELS = [
   { ...MODEL_DEFAULTS, id: "qwen3-max", format: "openai", vendor: "qwen" },
   { ...MODEL_DEFAULTS, id: "kimi-k2", format: "openai", vendor: "kimi" },
   { ...MODEL_DEFAULTS, id: "glm-4.6", format: "openai", vendor: "glm" },
-  { ...MODEL_DEFAULTS, id: "mimo-v2.5", format: "openai", vendor: "custom-openai" },
+  { ...MODEL_DEFAULTS, id: "mimo-v2.5", format: "openai", vendor: "mimo" },
   { ...MODEL_DEFAULTS, id: "gemini-2.5-pro", format: "gemini", vendor: "gemini" },
   { ...MODEL_DEFAULTS, id: "claude-opus-4-8", format: "claude", vendor: "claude" },
 ];
