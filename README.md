@@ -39,6 +39,11 @@ docker compose up            # 项目自带 docker-compose.yml
 - PowerShell：`docker run --rm -it -p 8788:8788 -v ${PWD}:/app -w /app oven/bun:latest bun run server.js`
 - CMD：`docker run --rm -it -p 8788:8788 -v %cd%:/app -w /app oven/bun:latest bun run server.js`
 
+**方式 3 · 现成镜像**（不用 clone 仓库，CI 已自动构建并推到 GHCR）
+```bash
+docker run --rm -p 8788:8788 ghcr.io/lanvender4444/mockupstream:latest
+```
+
 ### 第 2 步：new-api 渠道 Base URL 填什么
 
 **取决于 new-api（调用方）在哪跑**：
@@ -222,6 +227,8 @@ MockUpStream/
 ├── vendor/alpine.min.js # 本地 Alpine（无联网依赖）
 ├── panel.html           # 控制台
 ├── docker-compose.yml   # 独立 Docker 运行（相对挂载）
+├── Dockerfile           # 自包含镜像（CI 构建并推到 GHCR，无需挂载）
+├── .github/workflows/   # CI(bun test) + Docker 镜像发布
 ├── mock.db              # SQLite 持久化（自动生成，可删除以重置；已 gitignore）
 └── formats.test.js      # bun test
 ```
