@@ -141,6 +141,12 @@
   .ep { font-family:inherit; font-size:12px; background:var(--floor); border:1px solid var(--border); border-radius:var(--radius);
         padding:6px 10px; display:flex; align-items:center; gap:8px; margin-bottom:6px; }
   .ep code { flex:1; overflow:auto; white-space:nowrap; color:var(--accent-fg); }
+  /* ---------- 表格行内的多种 URL(本机/Docker/局域网/公网), Channels 表格 Base URL 列用 ---------- */
+  .url-list { display:flex; flex-direction:column; gap:3px; min-width:220px; }
+  .url-row { display:flex; align-items:center; gap:5px; }
+  .url-row .url-label { color:var(--mut); font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; min-width:30px; flex-shrink:0; }
+  .url-row code { flex:1; overflow:auto; white-space:nowrap; color:var(--accent-fg); font-size:10.5px; }
+  .url-row button { flex-shrink:0; }
   .field-label { color:var(--mut); font-size:11px; margin:14px 0 6px; text-transform:uppercase; letter-spacing:.06em; font-weight:600; }
   .field-label:first-child { margin-top:0; }
 
@@ -232,6 +238,7 @@
       <button :class="{active: tab==='channels'}" @click="tab='channels'">Channels</button>
       <button :class="{active: tab==='recent'}" @click="tab='recent'">Recent Requests</button>
       <button :class="{active: tab==='network'}" @click="tab='network'">Network &amp; Security</button>
+      <button :class="{active: tab==='burst'}" @click="tab='burst'">Burst Test</button>
     </div>
 
     <div class="tabcontent">
@@ -583,9 +590,13 @@
                   <td><input type="number" min="0" max="100" x-model.number="c.errorRate" @change="saveChannel(c)" /></td>
                   <td><input type="number" x-model.number="c.extraLatencyMs" @change="saveChannel(c)" /></td>
                   <td>
-                    <div style="display:flex; align-items:center; gap:6px">
-                      <code x-text="channelUrl(c)" style="white-space:nowrap"></code>
-                      <button class="sm" @click="copy(channelUrl(c))">Copy</button>
+                    <div class="url-list">
+                      <div class="url-row"><span class="url-label">本机</span><code x-text="'http://localhost:' + c.port"></code><button class="sm" @click="copy('http://localhost:' + c.port)">Copy</button></div>
+                      <div class="url-row"><span class="url-label">Docker</span><code x-text="'http://host.docker.internal:' + c.port"></code><button class="sm" @click="copy('http://host.docker.internal:' + c.port)">Copy</button></div>
+                      <template x-for="ip in lanIps" :key="c.id + '-' + ip">
+                        <div class="url-row"><span class="url-label">局域网</span><code x-text="'http://' + ip + ':' + c.port"></code><button class="sm" @click="copy('http://' + ip + ':' + c.port)">Copy</button></div>
+                      </template>
+                      <div class="url-row"><span class="url-label">公网</span><code>http://&lt;公网地址/域名&gt;:<span x-text="c.port"></span></code></div>
                     </div>
                   </td>
                   <td><button class="sm danger" @click="delChannel(c.id)">Delete</button></td>
@@ -596,6 +607,7 @@
           </table>
           <div class="btns" style="margin-top:10px"><button class="primary" @click="openNewChannelDialog()">+ New Channel</button></div>
           <div class="hint">Enabled 关掉、或者 Error Rate 拉高，都会让这个渠道下的所有请求直接失败（不管打的是哪个模型），配合 Extra Latency 一起可以模拟"渠道变慢 / 不稳定 / 整个挂掉"。改端口立刻生效（换成新端口监听，不用重启服务）；两个渠道用同一个端口、或者跟主服务端口冲突，保存时会报错拦下来。字段改完失焦即保存。</div>
+          <div class="hint">Base URL 那一列列出的几种写法分别对应 new-api 在哪跑：本机 = new-api 和 mock 都不在容器里；Docker = new-api 在容器里、mock 在宿主机；局域网 = new-api 在同事的机器/另一台设备上；公网需要自己做端口转发/反向代理再把地址换成真实的。详细规则见「Network &amp; Security」页签。</div>
         </div>
       </template>
 
@@ -695,6 +707,91 @@
             <div class="row"><label>新密码</label><input type="password" x-model="authForm.password" placeholder="留空=不修改" autocomplete="new-password" /></div>
             <div class="btns"><button class="primary" @click="savePassword()">Save Password</button></div>
             <div class="hint">密码只经服务端 bcrypt 校验一次性传输，不写入 localStorage / Cookie 明文，浏览器也不缓存这个值。</div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ===== burst (压测) ===== -->
+      <template x-if="tab==='burst'">
+        <div>
+          <div class="card">
+            <h2>Burst Test（压测）</h2>
+            <div class="card-sub">给指定模型/渠道并发发一批测试请求，看错误率和延迟分布。sk 令牌这个 mock 完全不校验，只是模拟真实请求形状。</div>
+
+            <div class="row"><label>模型</label>
+              <select x-model="burstForm.modelId">
+                <option value="">（选择模型）</option>
+                <template x-for="m in models" :key="m.id"><option :value="m.id" x-text="m.id"></option></template>
+              </select>
+            </div>
+            <div class="row"><label>渠道</label>
+              <select x-model="burstForm.channelId">
+                <option value="">（主端口，无渠道）</option>
+                <template x-for="c in channels" :key="c.id"><option :value="c.id" x-text="c.name + ' (' + c.port + ')'"></option></template>
+              </select>
+            </div>
+            <div class="row"><label>sk 令牌</label><input x-model="burstForm.token" placeholder="sk-mock" /></div>
+            <div class="row"><label>Prompt</label><input x-model="burstForm.prompt" placeholder="不填走默认值「压测测试」" /></div>
+            <div class="row"><label>Stream</label><input type="checkbox" x-model="burstForm.stream" /></div>
+            <div class="row"><label>条数</label><input type="number" min="1" max="1000" x-model.number="burstForm.count" /></div>
+            <div class="row"><label>并发数</label><input type="number" min="1" max="50" x-model.number="burstForm.concurrency" /></div>
+
+            <div class="btns">
+              <button class="primary" @click="runBurst()" :disabled="burstState.running || !burstForm.modelId">
+                <span x-text="burstState.running ? '压测中…' : '开始压测'"></span>
+              </button>
+            </div>
+            <div class="hint" x-show="burstState.error" style="color:var(--err)" x-text="burstState.error"></div>
+          </div>
+
+          <div class="card" x-show="burstState.total > 0 || burstState.running">
+            <h2>进度</h2>
+            <div class="card-sub">
+              已发 <b x-text="burstState.sent"></b> / <span x-text="burstForm.count"></span>
+              &nbsp;·&nbsp; 成功 <b style="color:var(--ok)" x-text="burstState.success"></b>
+              &nbsp;·&nbsp; 失败 <b style="color:var(--err)" x-text="burstState.fail"></b>
+            </div>
+
+            <template x-if="burstState.summary">
+              <div>
+                <div class="field-label">汇总</div>
+                <table>
+                  <thead><tr><th>状态</th><th>条数</th></tr></thead>
+                  <tbody>
+                    <template x-for="(cnt, status) in burstState.summary.byStatus" :key="status">
+                      <tr><td x-text="status"></td><td x-text="cnt"></td></tr>
+                    </template>
+                  </tbody>
+                </table>
+                <div class="hint" style="margin-top:10px">
+                  延迟(ms，仅统计成功请求<span x-text="burstForm.stream ? '，流式为首包延迟' : ''"></span>)：
+                  min <b x-text="burstState.summary.latency.min"></b>
+                  &nbsp;avg <b x-text="burstState.summary.latency.avg"></b>
+                  &nbsp;max <b x-text="burstState.summary.latency.max"></b>
+                  &nbsp;p95 <b x-text="burstState.summary.latency.p95"></b>
+                </div>
+              </div>
+            </template>
+
+            <template x-if="burstState.requests.length">
+              <div>
+                <div class="field-label" style="margin-top:14px; cursor:pointer" @click="burstState.showDetail = !burstState.showDetail">
+                  逐条明细 <span x-text="burstState.showDetail ? '（收起）' : '（展开 ' + burstState.requests.length + ' 条）'"></span>
+                </div>
+                <table x-show="burstState.showDetail">
+                  <thead><tr><th>#</th><th>状态</th><th>延迟</th></tr></thead>
+                  <tbody>
+                    <template x-for="r in burstState.requests" :key="r.index">
+                      <tr>
+                        <td x-text="r.index + 1"></td>
+                        <td><span class="pill" :class="r.ok ? 'ok' : 'err'" x-text="r.status"></span></td>
+                        <td x-text="r.latencyMs + 'ms'"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </template>
           </div>
         </div>
       </template>
@@ -815,6 +912,8 @@ function app() {
     origin: location.origin,
     tab: "models",
     models: [], configurations: [], presets: [], channels: [], recent: [], sel: null, selConfig: null, toastMsg: "",
+    burstForm: { modelId: "", channelId: "", token: "sk-mock", prompt: "", stream: false, count: 20, concurrency: 5 },
+    burstState: { running:false, sent:0, success:0, fail:0, total:0, summary:null, requests:[], showDetail:false, error:"" },
     editingPreset: "", presetForm: {},
     modelSearch: "", collapsedGroups: {},
     confirmState: { open:false, message:"", resolveFn:null },
@@ -891,7 +990,7 @@ function app() {
       window.addEventListener("keydown", (e) => {
         if (this.confirmState.open) return; // Escape 由 @keydown.escape.window 处理
         if (["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName)) return;
-        const map = { "1":"tutorial", "2":"models", "3":"presets", "4":"channels", "5":"recent", "6":"network" };
+        const map = { "1":"tutorial", "2":"models", "3":"presets", "4":"channels", "5":"recent", "6":"network", "7":"burst" };
         if (map[e.key]) this.tab = map[e.key];
       });
     },
@@ -967,6 +1066,48 @@ function app() {
       this.selConfig = c ? JSON.parse(JSON.stringify(c)) : null;
     },
     toast(msg, ok=true) { this.toastMsg = msg; setTimeout(() => this.toastMsg = "", 1600); },
+    async runBurst() {
+      if (!this.burstForm.modelId) return;
+      this.burstState = { running:true, sent:0, success:0, fail:0, total:this.burstForm.count, summary:null, requests:[], showDetail:false, error:"" };
+
+      let res;
+      try {
+        res = await fetch("/__test/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(this.burstForm),
+        });
+      } catch (e) {
+        this.burstState.running = false;
+        this.burstState.error = "请求失败: " + e.message;
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop(); // 最后一段可能不完整, 留到下一轮拼
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const evt = JSON.parse(line);
+          if (evt.type === "progress") {
+            this.burstState.sent++;
+            if (evt.ok) this.burstState.success++; else this.burstState.fail++;
+            this.burstState.requests.push(evt);
+          } else if (evt.type === "done") {
+            this.burstState.summary = evt.summary;
+          } else if (evt.type === "error") {
+            this.burstState.error = evt.message;
+          }
+        }
+      }
+      this.burstState.running = false;
+    },
     async saveModel() {
       const r = await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(this.sel) });
       if (r.ok) { const {model} = await r.json(); await this.loadState(); this.select(model.id); this.toast("已保存并生效"); }
