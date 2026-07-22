@@ -24,6 +24,7 @@ import { shouldInjectError, resolveLatencyMs, shouldChannelFail } from "./usage.
 import * as openai from "./formats/openai.js";
 import * as claude from "./formats/claude.js";
 import * as gemini from "./formats/gemini.js";
+import * as testRunner from "./testRunner.js";
 
 const PORT = Number(process.env.MOCK_PORT || 8788);
 const TLS = resolveTls();
@@ -363,6 +364,57 @@ Bun.serve({
       const state = await store.reset();
       for (const channel of state.channels) startChannelListener(channel);
       return json({ ok: true, state });
+    }
+
+    if (p === "/__test/run" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const count = Number(body.count);
+      const concurrency = Number(body.concurrency);
+
+      const stream = new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          const push = (obj) => controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+
+          if (!Number.isInteger(count) || count < 1 || count > 1000) {
+            push({ type: "error", message: "条数(count)必须是 1-1000 的整数" });
+            return controller.close();
+          }
+          if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 50) {
+            push({ type: "error", message: "并发数(concurrency)必须是 1-50 的整数" });
+            return controller.close();
+          }
+
+          let target;
+          try {
+            target = testRunner.resolveTarget(store.getState(), { modelId: body.modelId, channelId: body.channelId });
+          } catch (e) {
+            push({ type: "error", message: e.message });
+            return controller.close();
+          }
+
+          try {
+            await testRunner.runBurstTest(
+              {
+                baseUrl: `http://localhost:${target.port}`,
+                format: target.format,
+                model: body.modelId,
+                token: body.token || "",
+                prompt: body.prompt || "",
+                stream: !!body.stream,
+                count,
+                concurrency,
+              },
+              push
+            );
+          } catch (e) {
+            push({ type: "error", message: e.message });
+          }
+          controller.close();
+        },
+      });
+
+      return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
     }
 
     // ---------- 上游 API(不带渠道，直连默认行为——渠道专属的走各自独立端口，见文件末尾) ----------
