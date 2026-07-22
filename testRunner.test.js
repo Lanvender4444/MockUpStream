@@ -1,6 +1,6 @@
 // testRunner.test.js —— bun test: 压测核心逻辑(resolveTarget / buildRequestBody / runBurstTest)。
 import { test, expect } from "bun:test";
-import { resolveTarget, buildRequestBody } from "./testRunner.js";
+import { resolveTarget, buildRequestBody, runBurstTest } from "./testRunner.js";
 
 const STATE = {
   port: 8788,
@@ -75,4 +75,119 @@ test("buildRequestBody: prompt 未提供时默认「压测测试」", () => {
 
 test("buildRequestBody: 未知协议抛错", () => {
   expect(() => buildRequestBody("unknown-fmt", "m", "hi", false)).toThrow(/未知协议/);
+});
+
+test("runBurstTest: 全部成功时 summary 统计正确", async () => {
+  const srv = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  try {
+    const events = [];
+    const { summary, requests } = await runBurstTest(
+      { baseUrl: `http://localhost:${srv.port}`, format: "openai", model: "m", token: "sk-mock", prompt: "hi", stream: false, count: 10, concurrency: 3 },
+      (e) => events.push(e)
+    );
+    expect(summary.total).toBe(10);
+    expect(summary.success).toBe(10);
+    expect(summary.fail).toBe(0);
+    expect(summary.byStatus["200"]).toBe(10);
+    expect(requests.length).toBe(10);
+    expect(events.filter((e) => e.type === "progress").length).toBe(10);
+    expect(events.at(-1).type).toBe("done");
+  } finally {
+    srv.stop();
+  }
+});
+
+test("runBurstTest: 按状态码分组统计成功/失败", async () => {
+  let n = 0;
+  const srv = Bun.serve({
+    port: 0,
+    fetch() {
+      n++;
+      // 前 6 条成功, 后 4 条 503
+      return n <= 6
+        ? new Response(JSON.stringify({ ok: true }))
+        : new Response(JSON.stringify({ error: "mock" }), { status: 503 });
+    },
+  });
+  try {
+    const { summary } = await runBurstTest(
+      { baseUrl: `http://localhost:${srv.port}`, format: "openai", model: "m", token: "", prompt: "hi", stream: false, count: 10, concurrency: 5 },
+      () => {}
+    );
+    expect(summary.total).toBe(10);
+    expect(summary.success).toBe(6);
+    expect(summary.fail).toBe(4);
+    expect(summary.byStatus["200"]).toBe(6);
+    expect(summary.byStatus["503"]).toBe(4);
+    // 延迟分布只统计成功的
+    expect(summary.latency.min).toBeGreaterThanOrEqual(0);
+  } finally {
+    srv.stop();
+  }
+});
+
+test("runBurstTest: 并发数确实生效(同时在途请求数不超过 concurrency)", async () => {
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const srv = Bun.serve({
+    port: 0,
+    async fetch() {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 30));
+      inFlight--;
+      return new Response(JSON.stringify({ ok: true }));
+    },
+  });
+  try {
+    await runBurstTest(
+      { baseUrl: `http://localhost:${srv.port}`, format: "openai", model: "m", token: "", prompt: "hi", stream: false, count: 12, concurrency: 3 },
+      () => {}
+    );
+    expect(maxInFlight).toBeLessThanOrEqual(3);
+    expect(maxInFlight).toBeGreaterThan(1); // 确实并发了, 不是退化成串行
+  } finally {
+    srv.stop();
+  }
+});
+
+test("runBurstTest: 网络层异常(连不上)记为 fail, status=network_error, 不中断整批", async () => {
+  const { summary } = await runBurstTest(
+    { baseUrl: "http://127.0.0.1:1", format: "openai", model: "m", token: "", prompt: "hi", stream: false, count: 3, concurrency: 2 },
+    () => {}
+  );
+  expect(summary.total).toBe(3);
+  expect(summary.fail).toBe(3);
+  expect(summary.byStatus["network_error"]).toBe(3);
+});
+
+test("runBurstTest: Authorization 头正确带上, token 为空时不带该头", async () => {
+  let seenAuth;
+  const srv = Bun.serve({
+    port: 0,
+    fetch(req) {
+      seenAuth = req.headers.get("authorization");
+      return new Response(JSON.stringify({ ok: true }));
+    },
+  });
+  try {
+    await runBurstTest(
+      { baseUrl: `http://localhost:${srv.port}`, format: "openai", model: "m", token: "sk-abc", prompt: "hi", stream: false, count: 1, concurrency: 1 },
+      () => {}
+    );
+    expect(seenAuth).toBe("Bearer sk-abc");
+
+    await runBurstTest(
+      { baseUrl: `http://localhost:${srv.port}`, format: "openai", model: "m", token: "", prompt: "hi", stream: false, count: 1, concurrency: 1 },
+      () => {}
+    );
+    expect(seenAuth).toBeNull();
+  } finally {
+    srv.stop();
+  }
 });
