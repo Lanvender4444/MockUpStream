@@ -16,3 +16,31 @@ export function resolveTarget(state, { modelId, channelId }) {
   if (!channel) throw new Error(`未知渠道: ${channelId}`);
   return { format: model.format, port: channel.port };
 }
+
+const DEFAULT_PROMPT = "压测测试";
+
+// 按协议拼出相对路径 + body。三种协议的形状分别对齐 formats/openai.js、formats/claude.js、
+// formats/gemini.js 里各自 parseRequest() 的解析逻辑(反过来拼一份能被它们正确解析的请求)。
+export function buildRequestBody(format, model, prompt, stream) {
+  const text = prompt || DEFAULT_PROMPT;
+  if (format === "openai") {
+    return {
+      path: "/v1/chat/completions",
+      body: { model, messages: [{ role: "user", content: text }], stream: !!stream },
+    };
+  }
+  if (format === "claude") {
+    return {
+      path: "/v1/messages",
+      body: { model, messages: [{ role: "user", content: text }], stream: !!stream },
+    };
+  }
+  if (format === "gemini") {
+    const action = stream ? "streamGenerateContent" : "generateContent";
+    return {
+      path: `/v1beta/models/${encodeURIComponent(model)}:${action}`,
+      body: { contents: [{ role: "user", parts: [{ text }] }] },
+    };
+  }
+  throw new Error(`未知协议: ${format}`);
+}

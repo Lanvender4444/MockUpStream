@@ -1,6 +1,6 @@
 // testRunner.test.js —— bun test: 压测核心逻辑(resolveTarget / buildRequestBody / runBurstTest)。
 import { test, expect } from "bun:test";
-import { resolveTarget } from "./testRunner.js";
+import { resolveTarget, buildRequestBody } from "./testRunner.js";
 
 const STATE = {
   port: 8788,
@@ -43,4 +43,36 @@ test("resolveTarget: 未知 channelId 抛错(不静默回退主端口)", () => {
 test("resolveTarget: channelId 传空字符串等同不指定渠道 -> 主端口", () => {
   const r = resolveTarget(STATE, { modelId: "grok-4.5", channelId: "" });
   expect(r).toEqual({ format: "openai", port: 8788 });
+});
+
+test("buildRequestBody: openai 协议拼出 /v1/chat/completions", () => {
+  const { path, body } = buildRequestBody("openai", "grok-4.5", "hi", false);
+  expect(path).toBe("/v1/chat/completions");
+  expect(body).toEqual({ model: "grok-4.5", messages: [{ role: "user", content: "hi" }], stream: false });
+});
+
+test("buildRequestBody: claude 协议拼出 /v1/messages", () => {
+  const { path, body } = buildRequestBody("claude", "claude-opus-4-8", "hi", true);
+  expect(path).toBe("/v1/messages");
+  expect(body).toEqual({ model: "claude-opus-4-8", messages: [{ role: "user", content: "hi" }], stream: true });
+});
+
+test("buildRequestBody: gemini 协议非流式 -> generateContent，stream 体现在 URL 不在 body", () => {
+  const { path, body } = buildRequestBody("gemini", "gemini-2.5-pro", "hi", false);
+  expect(path).toBe("/v1beta/models/gemini-2.5-pro:generateContent");
+  expect(body).toEqual({ contents: [{ role: "user", parts: [{ text: "hi" }] }] });
+});
+
+test("buildRequestBody: gemini 协议流式 -> streamGenerateContent", () => {
+  const { path } = buildRequestBody("gemini", "gemini-2.5-pro", "hi", true);
+  expect(path).toBe("/v1beta/models/gemini-2.5-pro:streamGenerateContent");
+});
+
+test("buildRequestBody: prompt 未提供时默认「压测测试」", () => {
+  const { body } = buildRequestBody("openai", "grok-4.5", undefined, false);
+  expect(body.messages[0].content).toBe("压测测试");
+});
+
+test("buildRequestBody: 未知协议抛错", () => {
+  expect(() => buildRequestBody("unknown-fmt", "m", "hi", false)).toThrow(/未知协议/);
 });
