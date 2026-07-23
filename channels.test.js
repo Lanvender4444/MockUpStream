@@ -49,8 +49,9 @@ test("grok-4.5 种子了 3 份 Configuration: 默认 + 绑 backup + 绑 flaky", 
   expect(onBackup.channelIds).toEqual(["backup"]);
   expect(onBackup.latencyMs).toBe(800);
   expect(onFlaky.channelIds).toEqual(["flaky"]);
+  expect(onFlaky.errorEnabled).toBe(1);
   expect(onFlaky.errorRate).toBe(30);
-  expect(onFlaky.errorStatus).toBeGreaterThan(0); // shouldInjectError 要 errorStatus>0 才会真的注入, errorRate 单独设不够
+  expect(onFlaky.errorStatus).toBe(503);
 });
 
 test("其它模型只有一份不绑渠道的默认 Configuration", () => {

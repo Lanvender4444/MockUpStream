@@ -109,10 +109,13 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
   const body = await req.json().catch(() => ({}));
   const parsed = fmt.parseRequest(body, url);
 
+  const channelLabel = channel ? `${channel.name} :${channel.port}` : null;
+
   // 渠道级门禁(渠道被关掉/偶发故障): 直接失败, 不等模型自己的延迟——渠道都连不上, 没有"先等会再失败"这回事。
   if (shouldChannelFail(channel)) {
-    record({ model: parsed.model || "(unknown)", format: fmtName, stream: parsed.stream, result: `ERR ${channel.errorStatus}(channel)`, channel: channel.id });
-    return json(fmt.buildError({ errorMessage: channel.errorMessage, errorStatus: channel.errorStatus }), Number(channel.errorStatus));
+    const s = Number(channel.errorStatus) || 503;
+    record({ model: parsed.model || "(unknown)", format: fmtName, stream: parsed.stream, result: `ERR ${s}(channel)`, channel: channelLabel });
+    return json(fmt.buildError({ errorMessage: channel.errorMessage, errorStatus: s }), s);
   }
 
   const cfg = store.resolveModel(parsed.model, fmtName, channel ? channel.id : null);
@@ -120,11 +123,9 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
   const latencyMs = resolveLatencyMs(cfg) + (channel ? Number(channel.extraLatencyMs) || 0 : 0);
   if (latencyMs > 0) await sleep(latencyMs);
 
-  const channelTag = channel ? channel.id : null;
-
   // 注入错误
   if (shouldInjectError(cfg)) {
-    record({ model: parsed.model || cfg.id, format: fmtName, stream: parsed.stream, result: `ERR ${cfg.errorStatus}`, latencyMs, channel: channelTag });
+    record({ model: parsed.model || cfg.id, format: fmtName, stream: parsed.stream, result: `ERR ${cfg.errorStatus}`, latencyMs, channel: channelLabel });
     return json(fmt.buildError(cfg), Number(cfg.errorStatus));
   }
 
@@ -133,7 +134,7 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
   // 非流式
   if (!parsed.stream) {
     const resp = fmt.buildResponse(cfg, parsed.messages, modelName);
-    record({ model: modelName, format: fmtName, stream: false, result: usageTag(fmtName, resp), latencyMs, channel: channelTag });
+    record({ model: modelName, format: fmtName, stream: false, result: usageTag(fmtName, resp), latencyMs, channel: channelLabel });
     return json(resp);
   }
 
@@ -157,7 +158,7 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
       controller.close();
     },
   });
-  record({ model: modelName, format: fmtName, stream: true, result: "stream", latencyMs, channel: channelTag });
+  record({ model: modelName, format: fmtName, stream: true, result: "stream", latencyMs, channel: channelLabel });
   return new Response(stream, {
     headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Mock-Upstream": "1" },
   });
@@ -173,7 +174,7 @@ function usageTag(fmtName, resp) {
 // 返回 Response 表示命中了；返回 null 表示这条路径不归这层管，调用方自己接着 404。
 async function routeUpstream(p, req, url, channel) {
   if (p === "/v1/models") {
-    if (shouldChannelFail(channel)) return json({ error: { message: channel.errorMessage, type: "channel_unavailable" } }, Number(channel.errorStatus));
+    if (shouldChannelFail(channel)) { const s = Number(channel.errorStatus) || 503; return json({ error: { message: channel.errorMessage, type: "channel_unavailable" } }, s); }
     const data = store.getState().models
       .filter((m) => m.format === "openai")
       .map((m) => ({ id: m.id, object: "model", owned_by: "mock" }));
@@ -366,15 +367,43 @@ Bun.serve({
       return json({ ok: true, state });
     }
 
-    if (p === "/__test/run" && req.method === "POST") {
+    // ---------- 测试配置 CRUD ----------
+    if (p === "/__test-configs" && req.method === "GET") {
+      return json(store.getTestConfigs());
+    }
+    if (p === "/__test-configs" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
-      const count = Number(body.count);
-      const concurrency = Number(body.concurrency);
+      if ("password" in body) {
+        if (body.password) body.passwordHash = await auth.hashPassword(body.password);
+        else body.passwordHash = "";
+        delete body.password;
+      }
+      const cfg = await store.upsertTestConfig(body);
+      return json({ ok: true, config: cfg });
+    }
+    if (p.startsWith("/__test-configs/") && req.method === "DELETE") {
+      await store.deleteTestConfig(decodeURIComponent(p.slice("/__test-configs/".length)));
+      return json({ ok: true });
+    }
+    if (p === "/__test-unlock" && req.method === "POST") {
+      const { configId, password } = await req.json().catch(() => ({}));
+      const cfg = store.getTestConfig(configId);
+      if (!cfg) return json({ error: "not found" }, 404);
+      if (!cfg.hasPassword) return json(store.getTestResult(configId) || { summary: null, requests: [] });
+      const ok = await auth.verifyPassword(password || "", cfg._passwordHash);
+      if (!ok) return json({ error: "密码错误" }, 401);
+      return json(store.getTestResult(configId) || { summary: null, requests: [] });
+    }
 
-      const stream = new ReadableStream({
+    if (p === "/__test/run" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      const count = Number(b.count);
+      const concurrency = Number(b.concurrency);
+
+      const sse = new ReadableStream({
         async start(controller) {
-          const encoder = new TextEncoder();
-          const push = (obj) => controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+          const enc = new TextEncoder();
+          const push = (obj) => controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
 
           if (!Number.isInteger(count) || count < 1 || count > 1000) {
             push({ type: "error", message: "条数(count)必须是 1-1000 的整数" });
@@ -385,28 +414,37 @@ Bun.serve({
             return controller.close();
           }
 
-          let target;
-          try {
-            target = testRunner.resolveTarget(store.getState(), { modelId: body.modelId, channelId: body.channelId });
-          } catch (e) {
-            push({ type: "error", message: e.message });
+          const targetUrl = (b.targetUrl || "").replace(/\/+$/, "");
+          if (!targetUrl) {
+            push({ type: "error", message: "请填写目标地址(targetUrl)" });
             return controller.close();
           }
 
           try {
-            await testRunner.runBurstTest(
+            const captureBody = count === 1;
+            let channelLabel = "";
+            if (b.channelId) {
+              const ch = store.getChannel(b.channelId);
+              if (ch) channelLabel = `${ch.name} :${ch.port}`;
+            }
+            const { summary, requests } = await testRunner.runTest(
               {
-                baseUrl: `http://localhost:${target.port}`,
-                format: target.format,
-                model: body.modelId,
-                token: body.token || "",
-                prompt: body.prompt || "",
-                stream: !!body.stream,
+                baseUrl: targetUrl,
+                format: b.format || "openai",
+                model: b.model,
+                token: b.apiKey || "",
+                prompt: b.prompt || "",
+                stream: !!b.stream,
                 count,
                 concurrency,
+                captureBody,
+                channel: channelLabel,
               },
               push
             );
+            if (b.configId) {
+              store.setTestResult(b.configId, summary, requests);
+            }
           } catch (e) {
             push({ type: "error", message: e.message });
           }
@@ -414,7 +452,7 @@ Bun.serve({
         },
       });
 
-      return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
+      return new Response(sse, { headers: { "Content-Type": "application/x-ndjson" } });
     }
 
     // ---------- 上游 API(不带渠道，直连默认行为——渠道专属的走各自独立端口，见文件末尾) ----------

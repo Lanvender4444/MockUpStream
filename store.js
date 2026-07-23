@@ -34,6 +34,7 @@ export const CONFIG_DEFAULTS = {
   id: "default",
   modelId: "",
   name: "默认",
+  enabled: 1,
   content: "这是来自 mock 上游的假回复，用于测试 new-api 全链路计费与日志。",
   promptMode: "auto",
   promptTokens: 100,
@@ -48,6 +49,7 @@ export const CONFIG_DEFAULTS = {
   latencyMax: 0,
   latencyDist: "uniform", // "uniform" | "normal" —— 只在 latencyMode==="range" 时生效
   chunkDelayMs: 40,
+  errorEnabled: 0,
   errorStatus: 0,
   errorRate: 0,
   errorMessage: "mock injected error",
@@ -65,14 +67,14 @@ export const CHANNEL_DEFAULTS = {
   port: 8789,
   enabled: 1,             // 0/1(SQLite 没有 boolean); 0 时该渠道下所有请求直接返回渠道级错误，模拟"渠道挂了"
   errorRate: 0,           // 0-100，独立于 Configuration 自己的 errorRate，模拟"渠道不稳定，偶发失败"
-  errorStatus: 503,
+  errorStatus: 0,
   errorMessage: "channel unavailable (mock)",
   extraLatencyMs: 0,      // 叠加在 Configuration 自身延迟之上，模拟"这个渠道网络更慢"
 };
 const CHANNEL_COLS = Object.keys(CHANNEL_DEFAULTS);
 
-// 预设只承载"行为字段"(不含 id/modelId/name)，套用时覆盖 Configuration 对应字段。
-export const PRESET_FIELDS = CONFIG_COLS.filter((c) => !["id", "modelId", "name"].includes(c));
+// 预设只承载"行为字段"(不含 id/modelId/name/enabled)，套用时覆盖 Configuration 对应字段。
+export const PRESET_FIELDS = CONFIG_COLS.filter((c) => !["id", "modelId", "name", "enabled"].includes(c));
 
 // 规范化预设 patch: 只保留 PRESET_FIELDS + 数字字段转 number
 function normalizePatch(patch = {}) {
@@ -102,7 +104,7 @@ const DEFAULT_MODELS = [
 const DEFAULT_CONFIGS = [
   { id: "grok-4.5-default", modelId: "grok-4.5", name: "默认" },
   { id: "grok-4.5-on-backup", modelId: "grok-4.5", name: "在 backup 渠道(慢)", latencyMs: 800, channelIds: ["backup"] },
-  { id: "grok-4.5-on-flaky", modelId: "grok-4.5", name: "在 flaky 渠道(偶发故障)", errorStatus: 503, errorRate: 30, errorMessage: "mock channel error (simulated instability)", channelIds: ["flaky"] },
+  { id: "grok-4.5-on-flaky", modelId: "grok-4.5", name: "在 flaky 渠道(偶发故障)", errorEnabled: 1, errorStatus: 503, errorRate: 30, errorMessage: "mock channel error (simulated instability)", channelIds: ["flaky"] },
   { id: "deepseek-v4-flash-default", modelId: "deepseek-v4-flash", name: "默认" },
   { id: "qwen3-max-default", modelId: "qwen3-max", name: "默认" },
   { id: "kimi-k2-default", modelId: "kimi-k2", name: "默认" },
@@ -179,6 +181,16 @@ function initSchema() {
   const configColDefs = CONFIG_COLS.map((c) => (c === "id" ? "id TEXT PRIMARY KEY" : `${c} ${configColSqlType(c)}`)).join(", ");
   db.run(`CREATE TABLE IF NOT EXISTS configurations (${configColDefs}, ord INTEGER)`);
   db.run(`CREATE TABLE IF NOT EXISTS configuration_channels (configId TEXT, channelId TEXT, PRIMARY KEY(configId, channelId))`);
+}
+
+// 给老库的 configurations 表补上后加的列(errorEnabled 等)。
+// 跟 channel 的 migrateChannelColumns 同理: 从 CONFIG_COLS 检查缺失列, 挨个 ALTER TABLE ADD COLUMN。
+function migrateConfigColumns() {
+  const existing = new Set(db.query("PRAGMA table_info(configurations)").all().map((c) => c.name));
+  for (const col of CONFIG_COLS) {
+    if (col === "id" || existing.has(col)) continue;
+    db.run(`ALTER TABLE configurations ADD COLUMN ${col} ${configColSqlType(col)}`);
+  }
 }
 
 // 老库没有 vendor 列(厂商分类是后加的字段): 补列 + 按 id 关键字猜一次厂商，猜不出来的按原 format 落到对应的
@@ -384,8 +396,10 @@ export async function load(dbPath) {
   initSchema();
   migrateVendorColumn();
   migrateToConfigurations();
+  migrateConfigColumns();
   migrateChannelColumns();
   initAuthSchema();
+  initTestSchema();
   seedIfEmpty();
   return getState();
 }
@@ -419,15 +433,16 @@ export function getConfig(id) {
 }
 
 // 核心解析: 按 (modelId, channelId) 找该模型在这个渠道下该用哪份 Configuration。
+//   跳过 disabled (enabled=0) 的 Configuration。
 //   有专属绑定 channelId 的 Configuration -> 用它
-//   没有(渠道没配过/没传 channelId，包括不走 /ch/ 前缀的直连请求) -> 退回该模型 ord 最小的那个(默认)
+//   没有(渠道没配过/没传 channelId，包括不走 /ch/ 前缀的直连请求) -> 退回该模型 ord 最小且 enabled 的那个(默认)
 //   模型本身都查无 -> 兜底成 MODEL_DEFAULTS+CONFIG_DEFAULTS(跟旧版查无模型时的行为等价)
 export function resolveModel(id, fallbackFormat = "openai", channelId = null) {
   const model = getModel(id);
   if (!model) {
     return { ...MODEL_DEFAULTS, ...CONFIG_DEFAULTS, id: id || "default", format: fallbackFormat, modelId: id || "default" };
   }
-  const configs = getConfigsForModel(model.id);
+  const configs = getConfigsForModel(model.id).filter((c) => c.enabled !== 0);
   let config = channelId ? configs.find((c) => c.channelIds.includes(channelId)) : null;
   if (!config) config = configs[0];
   if (!config) config = { ...CONFIG_DEFAULTS, modelId: model.id };
@@ -493,6 +508,108 @@ export async function upsertPreset(name, patch) {
 
 export async function deletePreset(name) {
   db.run("DELETE FROM presets WHERE name = ?", [name]);
+}
+
+// ---------- 测试配置 ----------
+
+export const TEST_CONFIG_DEFAULTS = {
+  id: "",
+  name: "",
+  targetUrl: "",
+  model: "",
+  format: "openai",
+  apiKey: "",
+  channelId: "",
+  prompt: "",
+  stream: 0,
+  requestMode: "batch",
+  count: 20,
+  concurrency: 5,
+  createdAt: "",
+  updatedAt: "",
+};
+const TEST_COLS = Object.keys(TEST_CONFIG_DEFAULTS);
+
+function initTestSchema() {
+  db.run(`CREATE TABLE IF NOT EXISTS test_configs (
+    id TEXT PRIMARY KEY,
+    name TEXT, targetUrl TEXT, model TEXT, format TEXT, apiKey TEXT,
+    channelId TEXT, prompt TEXT, stream INTEGER,
+    requestMode TEXT, count INTEGER, concurrency INTEGER,
+    passwordHash TEXT, createdAt TEXT, updatedAt TEXT, ord INTEGER
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS test_results (
+    configId TEXT PRIMARY KEY, summary TEXT, requests TEXT, updatedAt TEXT
+  )`);
+}
+
+function normalizeTestConfig(c) {
+  const out = { ...TEST_CONFIG_DEFAULTS, ...c };
+  for (const k of TEST_COLS) {
+    if (out[k] == null) out[k] = TEST_CONFIG_DEFAULTS[k];
+    if (typeof TEST_CONFIG_DEFAULTS[k] === "number") out[k] = Number(out[k]) || 0;
+  }
+  out.id = String(out.id || "").trim() || crypto.randomUUID();
+  out.name = String(out.name || "").trim() || "未命名测试";
+  return out;
+}
+
+function getTestPasswordHash(id) {
+  const row = db.query("SELECT passwordHash FROM test_configs WHERE id = ?").get(id);
+  return row ? row.passwordHash : undefined;
+}
+
+export function getTestConfigs() {
+  return db.query("SELECT * FROM test_configs ORDER BY ord, rowid").all().map((r) => {
+    const { ord, passwordHash, ...rest } = r;
+    return { ...rest, hasPassword: !!passwordHash };
+  });
+}
+
+export function getTestConfig(id) {
+  const row = db.query("SELECT * FROM test_configs WHERE id = ?").get(id);
+  if (!row) return null;
+  const { ord, passwordHash, ...rest } = row;
+  return { ...rest, hasPassword: !!passwordHash, _passwordHash: passwordHash };
+}
+
+export async function upsertTestConfig(c) {
+  const cfg = normalizeTestConfig(c);
+  const now = new Date().toISOString();
+  if (!cfg.createdAt) cfg.createdAt = now;
+  cfg.updatedAt = now;
+
+  const ph = c.passwordHash !== undefined ? c.passwordHash : (getTestPasswordHash(cfg.id) || "");
+  const cols = TEST_COLS.filter((k) => k !== "passwordHash");
+  const placeholders = cols.map(() => "?").join(", ");
+  const updates = cols.filter((k) => k !== "id").map((k) => `${k}=excluded.${k}`).join(", ");
+  const vals = cols.map((k) => cfg[k]);
+  const ord = db.query("SELECT COALESCE(MAX(ord),-1)+1 n FROM test_configs").get().n || 0;
+  db.run(
+    `INSERT INTO test_configs (${cols.join(",")}, passwordHash, ord) VALUES (${placeholders}, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET ${updates}, passwordHash=excluded.passwordHash, updatedAt=excluded.updatedAt`,
+    [...vals, ph, ord]
+  );
+  return getTestConfig(cfg.id);
+}
+
+export async function deleteTestConfig(id) {
+  db.run("DELETE FROM test_results WHERE configId = ?", [id]);
+  db.run("DELETE FROM test_configs WHERE id = ?", [id]);
+}
+
+export function getTestResult(configId) {
+  const row = db.query("SELECT * FROM test_results WHERE configId = ?").get(configId);
+  if (!row) return null;
+  return { ...row, summary: JSON.parse(row.summary), requests: JSON.parse(row.requests) };
+}
+
+export function setTestResult(configId, summary, requests) {
+  const now = new Date().toISOString();
+  db.run(
+    "INSERT INTO test_results (configId, summary, requests, updatedAt) VALUES (?, ?, ?, ?) ON CONFLICT(configId) DO UPDATE SET summary=excluded.summary, requests=excluded.requests, updatedAt=excluded.updatedAt",
+    [configId, JSON.stringify(summary), JSON.stringify(requests), now]
+  );
 }
 
 export async function reset() {

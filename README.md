@@ -7,6 +7,8 @@
                      鉴权/配额/计费/日志/流式 全真     只有 LLM 输出是假的
 ```
 
+> 只想知道"命令行怎么打"？完整的命令行操作参考（启动/模型管理/测试/自测/Docker/部署/防火墙，一个都不漏）见 **[CLI.md](./CLI.md)**。
+
 ---
 
 ## 一键启动
@@ -213,6 +215,48 @@ bash scripts/gen-cert.sh       # 生成证书，SAN 覆盖 localhost + 本机所
 
 ---
 
+## 部署到云服务器
+
+> 命令+参数速查表见 [CLI.md 第 7 节](./CLI.md#7-打包部署到云服务器)。
+
+CI 已经把镜像自动构建推到了 GHCR（见上面"方式 3 · 现成镜像"），云服务器上直接 `docker pull` 是最省事的路子。如果服务器连不上 GHCR，或者不想依赖公网镜像仓库，`scripts/deploy.{sh,ps1}` 提供另一条路：**本地 `docker build` 打包镜像 → `scp` 传到服务器 → 远端 `docker load` 并重启容器**，只要本机能 ssh 到服务器就行。
+
+数据持久化用 docker named volume 挂到容器内的 `/app/mock.db`，重新部署/重建容器不会丢模型和预设。
+
+**前置条件**：本机装了 Docker（用来 build 镜像）；能 ssh 到云服务器（服务器上已经装好 Docker）；服务器安全组/防火墙放行要用的端口（默认 8788 控制台 + 8789-8791 渠道端口，改过渠道端口的话一并放行）。
+
+- Bash/macOS/Linux：
+  ```bash
+  DEPLOY_HOST=user@1.2.3.4 bash scripts/deploy.sh
+  # 常用可选参数（环境变量）：DEPLOY_PORT（ssh 端口）、DEPLOY_KEY（私钥路径）、
+  # IMAGE_TAG、CONTAINER_NAME、PORTS（空格分隔的端口映射）
+  DEPLOY_HOST=root@1.2.3.4 DEPLOY_PORT=2222 DEPLOY_KEY=~/.ssh/id_ed25519 bash scripts/deploy.sh
+  ```
+- PowerShell（需要 Windows 自带的 OpenSSH 客户端 `ssh.exe`/`scp.exe`）：
+  ```powershell
+  .\scripts\deploy.ps1 -DeployHost user@1.2.3.4
+  .\scripts\deploy.ps1 -DeployHost root@1.2.3.4 -DeployPort 2222 -DeployKey ~/.ssh/id_ed25519
+  ```
+
+两个脚本逻辑一致：build → 导出 tar → 上传 → 远端 `docker load` + `docker rm -f` 旧容器 + `docker run -d --restart unless-stopped` 起新容器。重复跑是幂等的，改了代码后再跑一次就是升级。
+
+**一键放行端口**：`scripts/open-ports.{sh,ps1}` 在云服务器上放行 TCP 端口，默认 8788 + 8789-8791。只管**操作系统自带防火墙**（Linux 自动识别 firewalld/ufw；Windows 用 `New-NetFirewallRule`）——阿里云/腾讯云/AWS 等云厂商的**安全组**是另一层，控制台上还要照样单独放行一遍，这两个脚本管不到那一层。
+
+- 云服务器是 Linux（要 root/sudo）：
+  ```bash
+  sudo bash scripts/open-ports.sh                          # 默认 8788 8789-8791
+  sudo PORTS="8788 8789-8791 9999" bash scripts/open-ports.sh
+  ```
+- 云服务器是 Windows（要「以管理员身份运行」PowerShell）：
+  ```powershell
+  .\scripts\open-ports.ps1
+  .\scripts\open-ports.ps1 -Ports 8788,8789-8791,9999
+  ```
+
+`open-ports.sh` 检测到 ufw 处于 inactive 时只会提示，不会替你 `ufw enable`——开启前自己确认 22(ssh) 端口在放行名单里，免得把自己锁在门外。
+
+---
+
 ## APIFox 接入
 
 <p align="left">
@@ -245,6 +289,7 @@ MockUpStream/
 ├── store.js             # SQLite(bun:sqlite) 读写 / 模型·预设增删改
 ├── presets.js           # 4 个内置场景预设
 ├── usage.js             # 格式无关的 token 计算
+├── testRunner.js        # 测试核心逻辑(面板「Test」页签 + scripts/test-helper.js 共用)
 ├── formats/
 │   ├── openai.js
 │   ├── claude.js
@@ -258,7 +303,13 @@ MockUpStream/
 ├── package.json         # bun run start / bun run https 两个命令别名，没有依赖
 ├── scripts/gen-cert.sh  # 生成本地自签证书
 ├── scripts/cli.js       # 命令行增删模型/预设(bun run cli ...)
+├── scripts/test-helper.js  # 测试 CLI 版(bun scripts/test-helper.js --target=.. --model=.. ...)
+├── scripts/deploy.sh    # 打包镜像+scp 上传云服务器+远端重启容器(bash)
+├── scripts/deploy.ps1   # 同上，PowerShell 版
+├── scripts/open-ports.sh   # 云服务器一键放行端口(firewalld/ufw)
+├── scripts/open-ports.ps1  # 同上，Windows 防火墙版
 ├── Caddyfile.example    # 公网+域名场景的反代示例(自动 HTTPS)
+├── CLI.md               # 命令行操作总参考(启动/模型管理/测试/自测/Docker/部署/防火墙)
 ├── mock.db              # SQLite 持久化（自动生成，可删除以重置；已 gitignore）
 └── formats.test.js      # bun test
 ```
@@ -304,7 +355,34 @@ curl -s "http://localhost:8788/v1beta/models/gemini-2.5-pro:generateContent" -H 
 
 ---
 
+## 测试工具（Test）
+
+> 完整 CLI 参数表见 [CLI.md 第 9 节](./CLI.md#9-测试工具scriptstest-helperjs)。
+
+向任意 OpenAI 兼容 endpoint（这个 mock 自己、或者一个真实 new-api 实例）发请求，看响应内容或统计错误率/延迟分布——不用再手打一条条 curl。两个入口功能等价，共享同一份核心逻辑（`testRunner.js`），都是"给一个目标地址 + 模型名"，不关心目标内部怎么调度渠道，只测端到端；测 new-api 时正好模拟了它自己按 API Key 调度上游的真实效果。
+
+**面板页签**：打开控制台，切到「Test」标签，填目标地址（`http://localhost:8788` 测这个 mock 自己，或填 new-api 的地址测它）+ 模型名 + 协议 + API Key，选**批量**（条数+并发数，跑完给汇总统计+可展开明细）或**单次**（发一条，直接看完整响应内容——非流式格式化 JSON 展示，流式看首包延迟）。
+
+**CLI 脚本**（`scripts/test-helper.js`，功能与面板页签等价，适合脚本化或远程测试）：
+```bash
+bun scripts/test-helper.js --target=http://localhost:8788 --model=grok-4.5 --count=20 --concurrency=5
+bun scripts/test-helper.js --target=http://192.168.1.100:3000 --model=gpt-3.5-turbo --api-key=sk-your-api-key --count=1
+```
+- `--target`：必填，目标地址（这个 mock 自己的地址，或一个真实 new-api 实例的地址）
+- `--model`：必填，要测的模型名
+- `--format`：协议，`openai`(默认)/`claude`/`gemini`
+- `--api-key`：目标要求的凭证；测这个 mock 时随便填（不校验），测真实 new-api 时填真的
+- `--prompt`：不填走默认值
+- `--stream`：加上则测试流式请求
+- `--count`：条数，1-1000，默认 20；**`--count=1` 时自动额外打印完整响应体**（单次模式）
+- `--concurrency`：并发数，1-50，默认 5
+- `--verbose`：额外打印逐条明细（默认只打印汇总，避免刷屏）
+
+---
+
 ## 命令行管理模型/预设（不用开网页）
+
+> 完整命令+全部字段表见 [CLI.md 第 2 节](./CLI.md#2-模型--配置--预设--渠道管理scriptsclijs)。
 
 `scripts/cli.js` 直接读写 `mock.db`（跟 `server.js` 用同一个 `store.js`），不需要服务在跑；服务在跑的时候也能用（SQLite 文件锁保证不会读到写一半的脏数据，但别跟网页控制台同时保存同一个模型）。
 

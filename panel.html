@@ -79,6 +79,7 @@
   input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   .row { display:grid; grid-template-columns:150px 1fr; gap:10px; align-items:center; margin-bottom:9px; }
   .row label { color:var(--mut); font-size:12px; }
+
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .btns { display:flex; gap:8px; margin-top:6px; }
   .hint { color:var(--mut); font-size:11.5px; margin-top:8px; line-height:1.6; }
@@ -167,6 +168,7 @@
   .policy-chip.blacklist { background:rgba(212,160,43,.15); color:var(--warn); }
   .mode-switch { display:flex; gap:4px; margin:10px 0; }
   .mode-switch button { flex:1; font-size:10.5px; padding:6px 4px; }
+  .mode-switch button.active { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
   .mode-switch button.active.allow-all { background:var(--ok); border-color:var(--ok); color:#0e2012; }
   .mode-switch button.active.deny-all { background:var(--err); border-color:var(--err); color:#2a0a09; }
   .mode-switch button.active.whitelist { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
@@ -222,8 +224,8 @@
                 <span class="name" x-text="m.id"></span>
               </div>
             </template>
-          </div>
-        </template>
+            </div>
+          </template>
       </div>
     </template>
     <div class="hint" x-show="!groupedModels().length" style="margin-top:0">No matching models</div>
@@ -238,7 +240,7 @@
       <button :class="{active: tab==='channels'}" @click="tab='channels'">Channels</button>
       <button :class="{active: tab==='recent'}" @click="tab='recent'">Recent Requests</button>
       <button :class="{active: tab==='network'}" @click="tab='network'">Network &amp; Security</button>
-      <button :class="{active: tab==='burst'}" @click="tab='burst'">Burst Test</button>
+      <button :class="{active: tab==='test'}" @click="tab='test'">Test</button>
     </div>
 
     <div class="tabcontent">
@@ -422,7 +424,12 @@
 
           <template x-if="selConfig">
           <div>
-            <div class="row"><label>配置名</label><input x-model="selConfig.name" /></div>
+            <div class="row"><label>配置名</label>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input x-model="selConfig.name" style="flex:1;min-width:0" @change="saveConfig()" />
+                <button @click="selConfig.enabled = !selConfig.enabled; saveConfig()" :class="selConfig.enabled ? 'primary' : ''" class="sm" x-text="selConfig.enabled ? '已启用' : '已停用'" style="white-space:nowrap"></button>
+              </div>
+            </div>
             <div class="row"><label>绑定渠道</label>
               <div class="btns" style="flex-wrap:wrap">
                 <template x-for="ch in channels" :key="ch.id">
@@ -433,7 +440,7 @@
               </div>
             </div>
             <div class="hint" style="margin:-4px 0 10px">点一下切换选中/取消，不选任何渠道 = 这份配置是该模型的兜底默认。</div>
-            <div class="row"><label>回复内容</label><textarea x-model="selConfig.content"></textarea></div>
+            <div class="row"><label>回复内容</label><textarea x-model="selConfig.content" @change="saveConfig()"></textarea></div>
             <div class="hint" style="margin:-4px 0 10px">回复内容=实际返回的文本（原样，不截断）；「输出 token」只是<b>上报的计费数字</b>，与正文长度无关，互不影响。</div>
             <div class="row"><label>输入 token</label>
               <div class="grid2">
@@ -467,13 +474,22 @@
             </div>
             <div class="hint" x-show="selConfig.latencyMode==='range'" style="margin:-4px 0 10px">均匀：区间内等概率；正态：以区间中点为均值、区间的六分之一为标准差，两端极小概率的尾部会被夹回区间内，不会溢出。每次请求都会重新采样一次延迟值，可以在「Recent Requests」里看实际用了多少 ms。</div>
             <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="selConfig.chunkDelayMs" /></div>
-            <div class="row"><label>注入错误码</label>
-              <div class="grid2">
-                <select x-model.number="selConfig.errorStatus"><option :value="0">不注入</option><option :value="400">400</option><option :value="401">401</option><option :value="403">403</option><option :value="429">429</option><option :value="500">500</option><option :value="503">503</option></select>
-                <input type="number" min="0" max="100" x-model.number="selConfig.errorRate" title="触发概率 %" />
-              </div>
+            <div class="row"><label>启用错误注入</label>
+              <button @click="selConfig.errorEnabled = !selConfig.errorEnabled; saveConfig()" :class="selConfig.errorEnabled ? 'primary' : ''" class="sm" x-text="selConfig.errorEnabled ? '已启用' : '已停用'"></button>
             </div>
-            <div class="row"><label>错误信息</label><input x-model="selConfig.errorMessage" /></div>
+            <template x-if="selConfig.errorEnabled">
+              <div>
+                <div class="row"><label>状态码/概率</label>
+                  <div class="grid2">
+                    <select x-model.number="selConfig.errorStatus"><option :value="400">400 Bad Request</option><option :value="401">401 Unauthorized</option><option :value="403">403 Forbidden</option><option :value="429">429 Rate Limit</option><option :value="500">500 Internal Server Error</option><option :value="502">502 Bad Gateway</option><option :value="503">503 Service Unavailable</option></select>
+                    <input type="number" min="0" max="100" x-model.number="selConfig.errorRate" title="触发概率 %：每次请求按此概率随机返回错误" />
+                  </div>
+                </div>
+                <div class="hint" style="margin:-4px 0 10px">每次请求以「概率 %」的概率返回选中的状态码。设为 100 则必返回错误，设为 0 相当于关闭。</div>
+                <div class="hint" style="margin:-4px 0 10px">⚠️ new-api 默认把 <code>400</code>/<code>408</code>/<code>422</code> 排除在失败率统计之外（打了也不计入渠道失败率/熔断），想让 new-api 真正判定为失败，选 <code>429</code>/<code>500</code>/<code>502</code>/<code>503</code> 这类；同时错误信息也别命中 new-api 的排除规则（比如包含"invalid params"/"内容长度超过阈值"这类话术，同样会被判定为"排除"而非"失败"）。</div>
+                <div class="row"><label>错误信息</label><input x-model="selConfig.errorMessage" /></div>
+              </div>
+            </template>
             <div class="btns">
               <button class="primary" @click="saveConfig()">Save Configuration</button>
               <button @click="openSaveAsPreset()">另存为预设</button>
@@ -560,13 +576,22 @@
                 <select x-model="presetForm.latencyDist"><option value="uniform">均匀随机数</option><option value="normal">正态分布随机数</option></select>
               </div>
               <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="presetForm.chunkDelayMs" /></div>
-              <div class="row"><label>注入错误码</label>
-                <div class="grid2">
-                  <select x-model.number="presetForm.errorStatus"><option :value="0">不注入</option><option :value="400">400</option><option :value="401">401</option><option :value="403">403</option><option :value="429">429</option><option :value="500">500</option><option :value="503">503</option></select>
-                  <input type="number" min="0" max="100" x-model.number="presetForm.errorRate" />
-                </div>
+              <div class="row"><label>启用错误注入</label>
+                <button @click="presetForm.errorEnabled = !presetForm.errorEnabled" :class="presetForm.errorEnabled ? 'primary' : ''" class="sm" x-text="presetForm.errorEnabled ? '已启用' : '已停用'"></button>
               </div>
-              <div class="row"><label>错误信息</label><input x-model="presetForm.errorMessage" /></div>
+              <template x-if="presetForm.errorEnabled">
+                <div>
+                  <div class="row"><label>状态码/概率</label>
+                    <div class="grid2">
+                      <select x-model.number="presetForm.errorStatus"><option :value="400">400 Bad Request</option><option :value="401">401 Unauthorized</option><option :value="403">403 Forbidden</option><option :value="429">429 Rate Limit</option><option :value="500">500 Internal Server Error</option><option :value="502">502 Bad Gateway</option><option :value="503">503 Service Unavailable</option></select>
+                      <input type="number" min="0" max="100" x-model.number="presetForm.errorRate" title="触发概率 %：每次请求按此概率随机返回错误" />
+                    </div>
+                  </div>
+                  <div class="hint" style="margin:-4px 0 10px">每次请求以「概率 %」的概率返回选中的状态码。设为 100 则必返回错误，设为 0 相当于关闭。</div>
+                  <div class="hint" style="margin:-4px 0 10px">⚠️ new-api 默认把 <code>400</code>/<code>408</code>/<code>422</code> 排除在失败率统计之外，想让 new-api 真正判定为失败，选 <code>429</code>/<code>500</code>/<code>502</code>/<code>503</code> 这类；错误信息也别命中排除规则（比如包含"invalid params"/"内容长度超过阈值"）。</div>
+                  <div class="row"><label>错误信息</label><input x-model="presetForm.errorMessage" /></div>
+                </div>
+              </template>
               <div class="btns"><button class="primary" @click="savePresetForm()">Save Preset</button><button @click="editingPreset=''">Cancel</button></div>
               <div class="hint">预设是完整行为快照（不含模型名/格式/回复内容），套用即得确定结果——只改你要的字段即可。</div>
             </div>
@@ -579,16 +604,30 @@
         <div class="card">
           <h2>Channels（模拟多个上游渠道）</h2>
           <div class="card-sub">每个渠道是独立端口（不是路径前缀）——很多 OpenAI 兼容客户端拼 URL 时会把带路径的 Base URL 处理错，独立端口跟主服务结构完全一样，对任何客户端都零风险。配成 new-api 里不同的渠道，测权重/失败转移/限流这些跨渠道逻辑。</div>
+          <div class="hint" style="margin:-4px 0 12px">主服务端口 <code x-text="port"></code> 本身也是一个有效的 endpoint（直连请求不经过渠道），Channels 是额外的独立端口。</div>
           <table>
-            <thead><tr><th>Name</th><th>Port</th><th>Enabled</th><th>Error Rate %</th><th>Extra Latency ms</th><th>Base URL</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Port</th><th>Enabled</th><th>Error Status</th><th>Error Rate %</th><th>Extra Latency ms</th><th>Base URL</th><th></th></tr></thead>
             <tbody>
+              <tr style="opacity:.65;font-style:italic">
+                <td>主服务(默认)</td>
+                <td x-text="port"></td>
+                <td style="text-align:center"><span class="pill ok">✓</span></td>
+                <td colspan="5">直连请求的目标端口，等效于一个始终可用的渠道</td>
+              </tr>
               <template x-for="c in channels" :key="c.id">
                 <tr>
                   <td><input x-model="c.name" @change="saveChannel(c)" /></td>
                   <td><input type="number" min="1" max="65535" x-model.number="c.port" @change="saveChannel(c)" /></td>
                   <td style="text-align:center"><input type="checkbox" x-model="c.enabled" @change="saveChannel(c)" /></td>
-                  <td><input type="number" min="0" max="100" x-model.number="c.errorRate" @change="saveChannel(c)" /></td>
-                  <td><input type="number" x-model.number="c.extraLatencyMs" @change="saveChannel(c)" /></td>
+                  <td>
+                    <select x-model.number="c.errorStatus" @change="saveChannel(c)" style="width:auto">
+                      <option :value="0">不使用</option>
+                      <option :value="400">400</option><option :value="401">401</option><option :value="403">403</option>
+                      <option :value="429">429</option><option :value="500">500</option><option :value="502">502</option><option :value="503">503</option>
+                    </select>
+                  </td>
+                  <td><input type="number" min="0" max="100" x-model.number="c.errorRate" @change="saveChannel(c)" title="触发概率 %" /></td>
+                  <td><input type="number" x-model.number="c.extraLatencyMs" @change="saveChannel(c)" title="叠加在模型自身延迟之上，模拟该渠道网络更慢" /></td>
                   <td>
                     <div class="url-list">
                       <div class="url-row"><span class="url-label">本机</span><code x-text="'http://localhost:' + c.port"></code><button class="sm" @click="copy('http://localhost:' + c.port)">Copy</button></div>
@@ -711,92 +750,131 @@
         </div>
       </template>
 
-      <!-- ===== burst (压测) ===== -->
-      <template x-if="tab==='burst'">
+      <!-- ===== test (测试) ===== -->
+      <template x-if="tab==='test'">
         <div>
           <div class="card">
-            <h2>Burst Test（压测）</h2>
-            <div class="card-sub">给指定模型/渠道并发发一批测试请求，看错误率和延迟分布。sk 令牌这个 mock 完全不校验，只是模拟真实请求形状。</div>
-
-            <div class="row"><label>模型</label>
-              <select x-model="burstForm.modelId">
-                <option value="">（选择模型）</option>
-                <template x-for="m in models" :key="m.id"><option :value="m.id" x-text="m.id"></option></template>
-              </select>
-            </div>
-            <div class="row"><label>渠道</label>
-              <select x-model="burstForm.channelId">
-                <option value="">（主端口，无渠道）</option>
-                <template x-for="c in channels" :key="c.id"><option :value="c.id" x-text="c.name + ' (' + c.port + ')'"></option></template>
-              </select>
-            </div>
-            <div class="row"><label>sk 令牌</label><input x-model="burstForm.token" placeholder="sk-mock" /></div>
-            <div class="row"><label>Prompt</label><input x-model="burstForm.prompt" placeholder="不填走默认值「压测测试」" /></div>
-            <div class="row"><label>Stream</label><input type="checkbox" x-model="burstForm.stream" /></div>
-            <div class="row"><label>条数</label><input type="number" min="1" max="1000" x-model.number="burstForm.count" /></div>
-            <div class="row"><label>并发数</label><input type="number" min="1" max="50" x-model.number="burstForm.concurrency" /></div>
-
+            <h2>Test（测试）</h2>
+            <div class="card-sub">向指定 endpoint 发请求，模拟 API Key 调度场景。每个测试配置独立保存，可设密码保护详情。</div>
+            <div class="row"><label>搜索</label><input x-model="testSearch" placeholder="按名称过滤…" /></div>
             <div class="btns">
-              <button class="primary" @click="runBurst()" :disabled="burstState.running || !burstForm.modelId">
-                <span x-text="burstState.running ? '压测中…' : '开始压测'"></span>
-              </button>
+              <button class="primary" @click="addTestConfig()">+ 新建测试</button>
             </div>
-            <div class="hint" x-show="burstState.error" style="color:var(--err)" x-text="burstState.error"></div>
           </div>
 
-          <div class="card" x-show="burstState.total > 0 || burstState.running">
-            <h2>进度</h2>
-            <div class="card-sub">
-              已发 <b x-text="burstState.sent"></b> / <span x-text="burstForm.count"></span>
-              &nbsp;·&nbsp; 成功 <b style="color:var(--ok)" x-text="burstState.success"></b>
-              &nbsp;·&nbsp; 失败 <b style="color:var(--err)" x-text="burstState.fail"></b>
+          <template x-for="tc in testConfigs.filter(t => !testSearch || t.name.toLowerCase().includes(testSearch.toLowerCase()))" :key="tc.id">
+            <div class="card" :class="tc._running ? 'dim' : ''">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px">
+                <span style="cursor:pointer; font-size:14px; user-select:none" @click="tc._collapsed = !tc._collapsed" x-text="tc._collapsed ? '▶' : '▼'"></span>
+                <input x-model="tc.name" placeholder="测试名称" style="flex:1" />
+              </div>
+              <template x-if="!tc._collapsed">
+              <div>
+              <div class="row"><label>目标地址</label><input x-model="tc.targetUrl" placeholder="http://192.168.1.100:3000" /></div>
+              <div class="row"><label>模型名</label><input x-model="tc.model" placeholder="grok-4.5" /></div>
+              <div class="row"><label>请求格式</label>
+                <select x-model="tc.format">
+                  <option value="openai">OpenAI</option><option value="claude">Claude</option><option value="gemini">Gemini</option>
+                </select>
+              </div>
+              <div class="row"><label>API Key</label><input x-model="tc.apiKey" placeholder="sk-xxx" /></div>
+              <div class="row"><label>渠道</label>
+                <select x-model="tc.channelId" @change="onTestChannelChange(tc)">
+                  <option value="">-- 不指定 --</option>
+                  <template x-for="ch in channels" :key="ch.id">
+                    <option :value="ch.id" x-text="ch.name + ' :' + ch.port"></option>
+                  </template>
+                </select>
+              </div>
+              <div class="row"><label>Prompt</label><input x-model="tc.prompt" placeholder="不填走默认值「测试」" /></div>
+              <div class="row"><label>Stream</label><input type="checkbox" x-model="tc.stream" /></div>
+              <div class="mode-switch">
+                <button :class="{active: tc.requestMode==='batch'}" @click="tc.requestMode='batch'; tc.count=tc._lastBatch||20; tc.concurrency=5">批量</button>
+                <button :class="{active: tc.requestMode==='single'}" @click="tc.requestMode='single'; tc._lastBatch=tc.count; tc.count=1; tc.concurrency=1">单次</button>
+              </div>
+              <template x-if="tc.requestMode==='batch'">
+                <div>
+                  <div class="row"><label>条数</label><input type="number" min="1" max="1000" x-model.number="tc.count" /></div>
+                  <div class="row"><label>并发数</label><input type="number" min="1" max="50" x-model.number="tc.concurrency" /></div>
+                </div>
+              </template>
+              <div class="row"><label>访问密码</label>
+                <input type="password" x-model="tc._newPwd" placeholder="留空则不设密码 / 清空保存可移除密码" />
+              </div>
+              <div class="btns" style="gap:6px">
+                <button class="primary" @click="runTestConfig(tc)" :disabled="tc._running || !tc.targetUrl || !tc.model">
+                  <span x-text="tc._running ? '测试中…' : '运行'"></span>
+                </button>
+                <button @click="saveTestConfig(tc)">保存</button>
+                <button @click="deleteTestConfig(tc)" style="color:var(--err)">删除</button>
+              </div>
+
+              <!-- 结果 -->
+              <template x-if="tc._result && tc._result.summary">
+                <div style="margin-top:14px; border-top:1px solid var(--border); padding-top:14px">
+                  <div class="field-label">结果</div>
+                  <div class="card-sub">
+                    已发 <b x-text="tc._result.summary.total"></b>
+                    &nbsp;·&nbsp; 成功 <b style="color:var(--ok)" x-text="tc._result.summary.success"></b>
+                    &nbsp;·&nbsp; 失败 <b style="color:var(--err)" x-text="tc._result.summary.fail"></b>
+                  </div>
+                  <div class="field-label">按状态码</div>
+                  <table>
+                    <thead><tr><th>状态</th><th>条数</th></tr></thead>
+                    <tbody>
+                      <template x-for="(cnt, status) in (tc._result.summary.byStatus || {})" :key="status">
+                        <tr><td x-text="status"></td><td x-text="cnt"></td></tr>
+                      </template>
+                    </tbody>
+                  </table>
+                  <div class="hint" style="margin-top:10px">
+                    延迟(ms，仅统计成功请求<span x-text="tc.stream ? '，流式为首包延迟' : ''"></span>)：
+                    min <b x-text="tc._result.summary.latency?.min"></b>
+                    &nbsp;avg <b x-text="tc._result.summary.latency?.avg"></b>
+                    &nbsp;max <b x-text="tc._result.summary.latency?.max"></b>
+                    &nbsp;p95 <b x-text="tc._result.summary.latency?.p95"></b>
+                  </div>
+
+                  <!-- 逐条明细 可能需要密码 -->
+                  <template x-if="tc._result.requests && tc._result.requests.length">
+                    <div>
+                      <div x-show="!tc._unlocked && tc.hasPassword" style="margin:10px 0">
+                        <label>输入密码查看详情</label>
+                        <div style="display:flex; gap:6px">
+                          <input type="password" x-model="tc._unlockPwd" @keydown.enter="unlockTestConfig(tc)" />
+                          <button @click="unlockTestConfig(tc)">解锁</button>
+                        </div>
+                      </div>
+                      <div x-show="tc._unlocked || !tc.hasPassword">
+                        <div class="field-label" style="margin-top:14px; cursor:pointer" @click="tc._showDetail = !tc._showDetail">
+                          逐条明细 <span x-text="tc._showDetail ? '（收起）' : '（展开 ' + tc._result.requests.length + ' 条）'"></span>
+                        </div>
+                        <table x-show="tc._showDetail">
+                          <thead><tr><th>#</th><th>状态</th><th>延迟</th><th>渠道</th></tr></thead>
+                          <tbody>
+                            <template x-for="r in tc._result.requests" :key="r.index">
+                              <tr>
+                                <td x-text="r.index + 1"></td>
+                                <td><span class="pill" :class="r.ok ? 'ok' : 'err'" x-text="r.status"></span></td>
+                                <td x-text="r.latencyMs + 'ms'"></td>
+                                <td x-text="r.channel || '-'"></td>
+                              </tr>
+                            </template>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </template>
             </div>
-
-            <template x-if="burstState.summary">
-              <div>
-                <div class="field-label">汇总</div>
-                <table>
-                  <thead><tr><th>状态</th><th>条数</th></tr></thead>
-                  <tbody>
-                    <template x-for="(cnt, status) in burstState.summary.byStatus" :key="status">
-                      <tr><td x-text="status"></td><td x-text="cnt"></td></tr>
-                    </template>
-                  </tbody>
-                </table>
-                <div class="hint" style="margin-top:10px">
-                  延迟(ms，仅统计成功请求<span x-text="burstForm.stream ? '，流式为首包延迟' : ''"></span>)：
-                  min <b x-text="burstState.summary.latency.min"></b>
-                  &nbsp;avg <b x-text="burstState.summary.latency.avg"></b>
-                  &nbsp;max <b x-text="burstState.summary.latency.max"></b>
-                  &nbsp;p95 <b x-text="burstState.summary.latency.p95"></b>
-                </div>
-              </div>
-            </template>
-
-            <template x-if="burstState.requests.length">
-              <div>
-                <div class="field-label" style="margin-top:14px; cursor:pointer" @click="burstState.showDetail = !burstState.showDetail">
-                  逐条明细 <span x-text="burstState.showDetail ? '（收起）' : '（展开 ' + burstState.requests.length + ' 条）'"></span>
-                </div>
-                <table x-show="burstState.showDetail">
-                  <thead><tr><th>#</th><th>状态</th><th>延迟</th></tr></thead>
-                  <tbody>
-                    <template x-for="r in burstState.requests" :key="r.index">
-                      <tr>
-                        <td x-text="r.index + 1"></td>
-                        <td><span class="pill" :class="r.ok ? 'ok' : 'err'" x-text="r.status"></span></td>
-                        <td x-text="r.latencyMs + 'ms'"></td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-              </div>
-            </template>
-          </div>
+          </template>
         </div>
       </template>
     </div>
-  </div>
+  </template>
+</div>
+</div>
 </div>
 
 <div class="statusbar">
@@ -912,8 +990,8 @@ function app() {
     origin: location.origin,
     tab: "models",
     models: [], configurations: [], presets: [], channels: [], recent: [], sel: null, selConfig: null, toastMsg: "",
-    burstForm: { modelId: "", channelId: "", token: "sk-mock", prompt: "", stream: false, count: 20, concurrency: 5 },
-    burstState: { running:false, sent:0, success:0, fail:0, total:0, summary:null, requests:[], showDetail:false, error:"" },
+    testConfigs: [],
+    testSearch: "",
     editingPreset: "", presetForm: {},
     modelSearch: "", collapsedGroups: {},
     confirmState: { open:false, message:"", resolveFn:null },
@@ -983,6 +1061,7 @@ function app() {
     async init() {
       await this.loadState();
       await this.loadAuthStatus();
+      await this.loadTestConfigs();
       if (this.models.length) this.select(this.models[0].id);
       this.pollStats();
       this.runTypewriter();
@@ -990,7 +1069,7 @@ function app() {
       window.addEventListener("keydown", (e) => {
         if (this.confirmState.open) return; // Escape 由 @keydown.escape.window 处理
         if (["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName)) return;
-        const map = { "1":"tutorial", "2":"models", "3":"presets", "4":"channels", "5":"recent", "6":"network", "7":"burst" };
+        const map = { "1":"tutorial", "2":"models", "3":"presets", "4":"channels", "5":"recent", "6":"network", "7":"test" };
         if (map[e.key]) this.tab = map[e.key];
       });
     },
@@ -1066,47 +1145,176 @@ function app() {
       this.selConfig = c ? JSON.parse(JSON.stringify(c)) : null;
     },
     toast(msg, ok=true) { this.toastMsg = msg; setTimeout(() => this.toastMsg = "", 1600); },
-    async runBurst() {
-      if (!this.burstForm.modelId) return;
-      this.burstState = { running:true, sent:0, success:0, fail:0, total:this.burstForm.count, summary:null, requests:[], showDetail:false, error:"" };
+
+    // ---------- 测试配置 ----------
+    async loadTestConfigs() {
+      const r = await fetch("/__test-configs");
+      const list = await r.json();
+      this.testConfigs = (list || []).map(c => ({
+        ...c,
+        stream: !!c.stream,
+        _result: null,
+        _unlocked: false,
+        _running: false,
+        _showDetail: false,
+        _collapsed: false,
+        _newPwd: "",
+        _unlockPwd: "",
+        _lastBatch: c.count || 20,
+      }));
+    },
+    addTestConfig() {
+      const tc = {
+        id: "",
+        name: "新测试 " + (this.testConfigs.length + 1),
+        targetUrl: "http://localhost:8788",
+        model: "grok-4.5",
+        format: "openai",
+        apiKey: "",
+        channelId: "",
+        prompt: "",
+        stream: false,
+        requestMode: "batch",
+        count: 20,
+        concurrency: 5,
+        hasPassword: false,
+        _result: null,
+        _unlocked: false,
+        _running: false,
+        _showDetail: false,
+        _collapsed: false,
+        _newPwd: "",
+        _unlockPwd: "",
+        _lastBatch: 20,
+      };
+      this.testConfigs.push(tc);
+    },
+    async saveTestConfig(tc) {
+      const body = {
+        id: tc.id,
+        name: tc.name,
+        targetUrl: tc.targetUrl,
+        model: tc.model,
+        format: tc.format,
+        apiKey: tc.apiKey,
+        channelId: tc.channelId,
+        prompt: tc.prompt,
+        stream: tc.stream ? 1 : 0,
+        requestMode: tc.requestMode,
+        count: tc.count,
+        concurrency: tc.concurrency,
+      };
+      if (tc._newPwd !== undefined) body.password = tc._newPwd;
+      const r = await fetch("/__test-configs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        const { config } = await r.json();
+        Object.assign(tc, config, {
+          stream: !!config.stream,
+          _newPwd: "",
+          hasPassword: config.hasPassword,
+        });
+        this.toast("已保存");
+      } else {
+        this.toast("保存失败", false);
+      }
+    },
+    async deleteTestConfig(tc) {
+      if (!tc.id) { this.testConfigs = this.testConfigs.filter(t => t !== tc); return; }
+      const ok = await this.askConfirm("删除测试「" + tc.name + "」？");
+      if (!ok) return;
+      await fetch("/__test-configs/" + encodeURIComponent(tc.id), { method: "DELETE" });
+      this.testConfigs = this.testConfigs.filter(t => t !== tc);
+      this.toast("已删除");
+    },
+    onTestChannelChange(tc) {
+      if (!tc.channelId) return;
+      const ch = this.channels.find(c => c.id === tc.channelId);
+      if (ch) tc.targetUrl = location.protocol + "//" + location.hostname + ":" + ch.port;
+    },
+    async runTestConfig(tc) {
+      if (!tc.targetUrl || !tc.model) return;
+      tc._running = true;
+      tc._result = null;
+      tc._unlocked = false;
 
       let res;
       try {
         res = await fetch("/__test/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(this.burstForm),
+          body: JSON.stringify({
+            targetUrl: tc.targetUrl,
+            model: tc.model,
+            format: tc.format,
+            apiKey: tc.apiKey,
+            channelId: tc.channelId,
+            prompt: tc.prompt,
+            stream: tc.stream,
+            requestMode: tc.requestMode,
+            count: tc.count,
+            concurrency: tc.concurrency,
+            configId: tc.id || undefined,
+          }),
         });
       } catch (e) {
-        this.burstState.running = false;
-        this.burstState.error = "请求失败: " + e.message;
+        tc._running = false;
+        tc._result = { summary: null, requests: [], error: "请求失败: " + e.message };
         return;
       }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      const requests = [];
+      let summary = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buf += decoder.decode(value, { stream: true });
         const lines = buf.split("\n");
-        buf = lines.pop(); // 最后一段可能不完整, 留到下一轮拼
+        buf = lines.pop();
         for (const line of lines) {
           if (!line.trim()) continue;
           const evt = JSON.parse(line);
           if (evt.type === "progress") {
-            this.burstState.sent++;
-            if (evt.ok) this.burstState.success++; else this.burstState.fail++;
-            this.burstState.requests.push(evt);
+            requests.push(evt);
           } else if (evt.type === "done") {
-            this.burstState.summary = evt.summary;
+            summary = evt.summary;
           } else if (evt.type === "error") {
-            this.burstState.error = evt.message;
+            tc._result = { summary: null, requests: [], error: evt.message };
           }
         }
       }
-      this.burstState.running = false;
+      tc._result = { summary, requests };
+      tc._running = false;
+
+      // save to DB if config has id
+      if (tc.id) {
+        try {
+          await fetch("/__test-configs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: tc.id, /* just trigger result save via /__test/run above */ }),
+          });
+        } catch {}
+      }
+    },
+    async unlockTestConfig(tc) {
+      if (!tc.id) { tc._unlocked = true; return; }
+      const r = await fetch("/__test-unlock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ configId: tc.id, password: tc._unlockPwd }),
+      });
+      if (!r.ok) { this.toast("密码错误", false); return; }
+      const data = await r.json();
+      if (data.requests) tc._result.requests = data.requests;
+      tc._unlocked = true;
+      tc._unlockPwd = "";
     },
     async saveModel() {
       const r = await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(this.sel) });
@@ -1229,7 +1437,7 @@ function app() {
     presetDefaults() {
       return { promptMode:"auto", promptTokens:100, completionTokens:30, cacheMode:"none", cacheRatio:0.5,
         cachedTokens:0, cacheCreationTokens:0, latencyMs:0, latencyMode:"fixed", latencyMin:0, latencyMax:0, latencyDist:"uniform",
-        chunkDelayMs:40, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
+        chunkDelayMs:40, errorEnabled:0, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
     },
     newPreset() { this.editingPreset = "__new__"; this.presetForm = { name:"", ...this.presetDefaults() }; },
     editPreset(p) { this.editingPreset = p.name; this.presetForm = { name:p.name, ...this.presetDefaults(), ...p.patch }; },

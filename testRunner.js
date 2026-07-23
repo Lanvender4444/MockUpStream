@@ -1,26 +1,9 @@
-// testRunner.js —— 压测核心逻辑：目标解析 + 请求体拼装 + 并发执行。
-// 不 import store.js —— 只认调用方传进来的 state({models,channels}) 和 baseUrl，
-// 因此同一份逻辑能同时服务"本机面板"(server.js 直读 store)和"CLI --host 远程压测"(GET /__state 拿到的 JSON)。
+// testRunner.js —— 通用 API 测试：向指定 endpoint（如 new-api）发送一批 OpenAI 兼容请求，统计成功率与延迟。
+// 不关心上游内部怎么调度，只测端到端——这正是 new-api API Key 自动调度场景下的真实效果。
 
-// 从 (modelId, channelId) 算出该打哪个协议、哪个端口。
-// channelId 为空/null/"" -> 主端口(state.port，缺省兜底 8788)；
-// channelId 指定但在 state.channels 里找不到 -> 抛错，不静默回退主端口(避免测错目标却不自知)。
-export function resolveTarget(state, { modelId, channelId }) {
-  const model = (state.models || []).find((m) => m.id === modelId);
-  if (!model) throw new Error(`未知模型: ${modelId}`);
+const DEFAULT_PROMPT = "测试";
 
-  if (!channelId) {
-    return { format: model.format, port: state.port || 8788 };
-  }
-  const channel = (state.channels || []).find((c) => c.id === channelId);
-  if (!channel) throw new Error(`未知渠道: ${channelId}`);
-  return { format: model.format, port: channel.port };
-}
-
-const DEFAULT_PROMPT = "压测测试";
-
-// 按协议拼出相对路径 + body。三种协议的形状分别对齐 formats/openai.js、formats/claude.js、
-// formats/gemini.js 里各自 parseRequest() 的解析逻辑(反过来拼一份能被它们正确解析的请求)。
+// 拼出相对路径 + body。三种协议，对齐 formats/*/parseRequest() 的解析逻辑。
 export function buildRequestBody(format, model, prompt, stream) {
   const text = prompt || DEFAULT_PROMPT;
   if (format === "openai") {
@@ -48,9 +31,12 @@ export function buildRequestBody(format, model, prompt, stream) {
 const REQUEST_TIMEOUT_MS = 30000;
 
 // 单条请求：拼 URL、发 fetch、记时、判定成功/失败。
-// 非流式：等 res.json() 记完整延迟。
-// 流式：读到第一个 chunk 就记"首包延迟"，随后把剩余流读完丢弃(避免连接残留)。
-async function runOne({ baseUrl, format, model, token, prompt, stream, index }) {
+// 非流式：等 res.text() 记完整延迟(text() 而不是 json()，因为不管 captureBody 是否打开都要先把 body 读完；
+//         captureBody=false 时读了也不用，但读一次是为了让连接正常关闭，不留半读的连接)。
+// 流式：读到第一个 chunk 就记"首包延迟"；captureBody=false 时读完剩余流丢弃(省内存)；
+//       captureBody=true 时把所有 chunk 解码拼接成完整原始 SSE 文本存进 result.body，
+//       此时会等流真正读完才返回(单次模式本来就该等完整内容，不是批量模式的"越快越好")。
+async function runSingleRequest({ baseUrl, format, model, token, prompt, stream, index, captureBody, channel }) {
   const { path, body } = buildRequestBody(format, model, prompt, stream);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -68,20 +54,38 @@ async function runOne({ baseUrl, format, model, token, prompt, stream, index }) 
 
     if (stream && res.body) {
       const reader = res.body.getReader();
-      await reader.read(); // 首包
+      const decoder = new TextDecoder();
+      const first = await reader.read(); // 首包
       const latencyMs = Math.round(performance.now() - start);
-      // 读完剩余流丢弃, 不阻塞在这里等首包之后的计时
+      const result = { index, ok: res.ok, status: String(res.status), latencyMs, channel };
+
+      if (captureBody) {
+        let text = first.value ? decoder.decode(first.value, { stream: true }) : "";
+        try {
+          let chunk;
+          while (!(chunk = await reader.read()).done) {
+            text += decoder.decode(chunk.value, { stream: true });
+          }
+          text += decoder.decode();
+        } catch {}
+        result.body = text;
+        return result;
+      }
+
+      // 不需要保留内容: 读完剩余流丢弃, 不阻塞在这里等首包之后的计时
       (async () => { try { while (!(await reader.read()).done) {} } catch {} })();
-      return { index, ok: res.ok, status: String(res.status), latencyMs };
+      return result;
     }
 
-    await res.json().catch(() => null);
+    const text = await res.text();
     const latencyMs = Math.round(performance.now() - start);
-    return { index, ok: res.ok, status: String(res.status), latencyMs };
+    const result = { index, ok: res.ok, status: String(res.status), latencyMs, channel };
+    if (captureBody) result.body = text;
+    return result;
   } catch (e) {
     const latencyMs = Math.round(performance.now() - start);
     const status = e.name === "AbortError" ? "timeout" : "network_error";
-    return { index, ok: false, status, latencyMs };
+    return { index, ok: false, status, latencyMs, channel };
   } finally {
     clearTimeout(timer);
   }
@@ -109,10 +113,10 @@ function summarize(requests) {
   return { total, success, fail, byStatus, latency };
 }
 
-// 并发 worker pool: 共享游标 + concurrency 个并行 worker 循环取号，直到发完 count 条。
-// 每条完成立即 onEvent(progress)，是真实完成速度，不是伪进度条。
-export async function runBurstTest(opts, onEvent) {
-  const { baseUrl, format, model, token, prompt, stream, count, concurrency } = opts;
+// 并发 worker pool，向指定 endpoint 发 count 条请求。
+// 每条完成立即 onEvent(progress)，是真实完成速度。
+export async function runTest(opts, onEvent) {
+  const { baseUrl, format, model, token, prompt, stream, count, concurrency, captureBody, channel } = opts;
   const requests = new Array(count);
   let nextIndex = 0;
 
@@ -120,7 +124,7 @@ export async function runBurstTest(opts, onEvent) {
     while (true) {
       const i = nextIndex++;
       if (i >= count) return;
-      const result = await runOne({ baseUrl, format, model, token, prompt, stream, index: i });
+      const result = await runSingleRequest({ baseUrl, format, model, token, prompt, stream, index: i, captureBody, channel });
       requests[i] = result;
       onEvent({ type: "progress", ...result });
     }

@@ -45,8 +45,10 @@ export function computeUsage(cfg, messages) {
 }
 
 // 是否应触发注入错误(概率)
+// 由 errorEnabled 显式控制开关，不再依赖 errorStatus>0 来隐含"关闭"语义
 export function shouldInjectError(cfg) {
-  return Number(cfg.errorStatus) > 0 && Math.random() * 100 < Number(cfg.errorRate);
+  if (!Number(cfg.errorEnabled)) return false;
+  return Math.random() * 100 < Number(cfg.errorRate);
 }
 
 // 渠道级门禁: 渠道被关掉(enabled=0) -> 恒失败, 模拟"渠道挂了"; 否则按 errorRate 概率失败, 模拟偶发故障。
