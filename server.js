@@ -31,10 +31,11 @@ const TLS = resolveTls();
 const PROTOCOL = TLS ? "https" : "http";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const recent = [];
-function record(e) { recent.unshift({ t: new Date().toISOString().slice(11, 19), ...e }); if (recent.length > 25) recent.pop(); }
+let recSeq = 0; // 单调自增游标：给每条记录一个稳定 id，测试用它框出"本次跑批期间产生的记录"。
+function record(e) { recent.unshift({ _id: recSeq++, t: new Date().toISOString().slice(11, 19), ...e }); if (recent.length > 1000) recent.pop(); }
 
-const json = (obj, status = 200) =>
-  new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "X-Mock-Upstream": "1" } });
+const json = (obj, status = 200, extraHeaders) =>
+  new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "X-Mock-Upstream": "1", ...(extraHeaders || {}) } });
 
 await store.load();
 
@@ -422,11 +423,46 @@ Bun.serve({
 
           try {
             const captureBody = count === 1;
+            // 逐条明细里的"渠道"要跟 Recent Requests 对齐:
+            // 先按显式选的 channelId; 没选就按 targetUrl 的端口反查命中的渠道
+            // (直连主端口 = 无渠道, 保持空, 前端显示 "-", 跟 Recent 的直连一致)。
             let channelLabel = "";
             if (b.channelId) {
               const ch = store.getChannel(b.channelId);
               if (ch) channelLabel = `${ch.name} :${ch.port}`;
             }
+            if (!channelLabel) {
+              try {
+                const tPort = Number(new URL(targetUrl).port);
+                const ch = store.getState().channels.find((c) => Number(c.port) === tPort);
+                if (ch) channelLabel = `${ch.name} :${ch.port}`;
+              } catch {}
+            }
+            const startSeq = recSeq; // 记录本次跑批开始时的游标
+
+            // 逐条明细(实时 + 最终)全部以 Recent Requests 那一份服务端记录为准，字段/格式完全一致。
+            // 每有请求完成，就把本次跑批期间新产生的记录按顺序推给前端(与最终结果同源同值，
+            // 不会出现"跑的时候一个样、结束又跳成另一个样")。
+            let liveIdx = 0;
+            let pushedUpTo = startSeq;
+            const rowFromRecord = (r, index) => ({
+              index,
+              ok: !String(r.result).startsWith("ERR"),
+              status: r.result,
+              latencyMs: r.latencyMs ?? null,
+              channel: r.channel || "",
+              format: r.format,
+              model: r.model,
+              stream: !!r.stream,
+            });
+            const drainRecords = () => {
+              const fresh = recent.filter((r) => r._id >= pushedUpTo).sort((a, b2) => a._id - b2._id);
+              for (const r of fresh) {
+                push({ type: "progress", ...rowFromRecord(r, liveIdx++) });
+                pushedUpTo = r._id + 1;
+              }
+            };
+
             const { summary, requests } = await testRunner.runTest(
               {
                 baseUrl: targetUrl,
@@ -440,10 +476,27 @@ Bun.serve({
                 captureBody,
                 channel: channelLabel,
               },
-              push
+              // testRunner 的 progress 只当"有一条完成了"的触发器，去捞对应的权威记录；
+              // done/error 原样透传。
+              (evt) => {
+                if (evt.type === "progress") drainRecords();
+                else if (evt.type === "done") { drainRecords(); push(evt); }
+                else push(evt);
+              }
             );
+            drainRecords(); // 收尾，捞掉最后可能晚到的记录
+
+            // 最终再按完整时间窗重排一次(index 连续、无遗漏)，替换实时结果。
+            const recs = recent
+              .filter((r) => r._id >= startSeq)
+              .sort((a, b2) => a._id - b2._id);
+            let detail = requests;
+            if (recs.length) {
+              detail = recs.map((r, i) => rowFromRecord(r, i));
+              push({ type: "detail", requests: detail });
+            }
             if (b.configId) {
-              store.setTestResult(b.configId, summary, requests);
+              store.setTestResult(b.configId, summary, detail);
             }
           } catch (e) {
             push({ type: "error", message: e.message });

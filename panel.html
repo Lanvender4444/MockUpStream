@@ -654,9 +654,25 @@
       <template x-if="tab==='recent'">
         <div class="card">
           <h2>Recent Requests</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">
+            <input x-model="recentFilter.model" @input="recentPage=1" placeholder="Model 包含…" style="width:150px" />
+            <select x-model="recentFilter.fmt" @change="recentPage=1">
+              <option value="">Fmt：全部</option><option value="openai">openai</option><option value="claude">claude</option><option value="gemini">gemini</option>
+            </select>
+            <select x-model="recentFilter.stream" @change="recentPage=1">
+              <option value="">Stream：全部</option><option value="yes">yes</option><option value="no">no</option>
+            </select>
+            <input x-model="recentFilter.channel" @input="recentPage=1" placeholder="Channel 包含…" style="width:150px" />
+            <input type="number" min="0" x-model="recentFilter.minLatency" @input="recentPage=1" placeholder="Latency ≥ ms" style="width:120px" />
+            <select x-model="recentFilter.result" @change="recentPage=1">
+              <option value="">Result：全部</option><option value="ok">成功</option><option value="err">失败(ERR)</option>
+            </select>
+            <button class="sm" @click="clearRecentFilter()">清除</button>
+          </div>
+          <div class="card-sub" style="margin:0 0 8px">共 <b x-text="recent.length"></b> 条，过滤后 <b x-text="filteredRecent().length"></b> 条</div>
           <table><thead><tr><th>Time</th><th>Model</th><th>Fmt</th><th>Stream</th><th>Channel</th><th>Latency</th><th>Result</th></tr></thead>
             <tbody>
-              <template x-for="(x,i) in recent" :key="i">
+              <template x-for="(x,i) in pagedRecent()" :key="i">
                 <tr><td x-text="x.t"></td><td x-text="x.model"></td><td><span class="fmt" :class="x.format" x-text="x.format"></span></td>
                     <td x-text="x.stream?'yes':'—'"></td>
                     <td x-text="x.channel || '—'"></td>
@@ -664,8 +680,17 @@
                     <td><span class="pill" :class="String(x.result).startsWith('ERR')?'err':'ok'" x-text="x.result"></span></td></tr>
               </template>
               <tr x-show="!recent.length"><td colspan="7" style="color:var(--mut)">No requests yet</td></tr>
+              <tr x-show="recent.length && !filteredRecent().length"><td colspan="7" style="color:var(--mut)">没有匹配过滤条件的请求</td></tr>
             </tbody>
           </table>
+          <div style="display:flex; gap:10px; align-items:center; justify-content:flex-end; margin-top:10px" x-show="filteredRecent().length > recentPageSize">
+            <button class="sm" @click="recentPrev()" :disabled="recentPage<=1">上一页</button>
+            <span class="card-sub" style="margin:0">第 <b x-text="Math.min(recentPage, recentPages())"></b> / <span x-text="recentPages()"></span> 页</span>
+            <button class="sm" @click="recentNext()" :disabled="recentPage>=recentPages()">下一页</button>
+            <select x-model.number="recentPageSize" @change="recentPage=1" style="width:auto">
+              <option :value="20">20/页</option><option :value="50">50/页</option><option :value="100">100/页</option>
+            </select>
+          </div>
         </div>
       </template>
 
@@ -810,30 +835,46 @@
               </div>
 
               <!-- 结果 -->
-              <template x-if="tc._result && tc._result.summary">
+              <template x-if="tc._result">
                 <div style="margin-top:14px; border-top:1px solid var(--border); padding-top:14px">
-                  <div class="field-label">结果</div>
-                  <div class="card-sub">
-                    已发 <b x-text="tc._result.summary.total"></b>
-                    &nbsp;·&nbsp; 成功 <b style="color:var(--ok)" x-text="tc._result.summary.success"></b>
-                    &nbsp;·&nbsp; 失败 <b style="color:var(--err)" x-text="tc._result.summary.fail"></b>
-                  </div>
-                  <div class="field-label">按状态码</div>
-                  <table>
-                    <thead><tr><th>状态</th><th>条数</th></tr></thead>
-                    <tbody>
-                      <template x-for="(cnt, status) in (tc._result.summary.byStatus || {})" :key="status">
-                        <tr><td x-text="status"></td><td x-text="cnt"></td></tr>
-                      </template>
-                    </tbody>
-                  </table>
-                  <div class="hint" style="margin-top:10px">
-                    延迟(ms，仅统计成功请求<span x-text="tc.stream ? '，流式为首包延迟' : ''"></span>)：
-                    min <b x-text="tc._result.summary.latency?.min"></b>
-                    &nbsp;avg <b x-text="tc._result.summary.latency?.avg"></b>
-                    &nbsp;max <b x-text="tc._result.summary.latency?.max"></b>
-                    &nbsp;p95 <b x-text="tc._result.summary.latency?.p95"></b>
-                  </div>
+                  <!-- 运行中: 实时进度 -->
+                  <template x-if="!tc._result.summary && !tc._result.error">
+                    <div class="card-sub">
+                      测试中… 已完成 <b x-text="tc._result.requests.length"></b>
+                      <span x-show="tc.requestMode==='batch'"> / <span x-text="tc.count"></span></span> 条
+                    </div>
+                  </template>
+                  <!-- 出错 -->
+                  <template x-if="tc._result.error">
+                    <div class="card-sub" style="color:var(--err)" x-text="tc._result.error"></div>
+                  </template>
+                  <!-- 完成后: 汇总 -->
+                  <template x-if="tc._result.summary">
+                    <div>
+                      <div class="field-label">结果</div>
+                      <div class="card-sub">
+                        已发 <b x-text="tc._result.summary.total"></b>
+                        &nbsp;·&nbsp; 成功 <b style="color:var(--ok)" x-text="tc._result.summary.success"></b>
+                        &nbsp;·&nbsp; 失败 <b style="color:var(--err)" x-text="tc._result.summary.fail"></b>
+                      </div>
+                      <div class="field-label">按状态码</div>
+                      <table>
+                        <thead><tr><th>状态</th><th>条数</th></tr></thead>
+                        <tbody>
+                          <template x-for="(cnt, status) in (tc._result.summary.byStatus || {})" :key="status">
+                            <tr><td x-text="status"></td><td x-text="cnt"></td></tr>
+                          </template>
+                        </tbody>
+                      </table>
+                      <div class="hint" style="margin-top:10px">
+                        延迟(ms，仅统计成功请求<span x-text="tc.stream ? '，流式为首包延迟' : ''"></span>)：
+                        min <b x-text="tc._result.summary.latency?.min"></b>
+                        &nbsp;avg <b x-text="tc._result.summary.latency?.avg"></b>
+                        &nbsp;max <b x-text="tc._result.summary.latency?.max"></b>
+                        &nbsp;p95 <b x-text="tc._result.summary.latency?.p95"></b>
+                      </div>
+                    </div>
+                  </template>
 
                   <!-- 逐条明细 可能需要密码 -->
                   <template x-if="tc._result.requests && tc._result.requests.length">
@@ -850,14 +891,17 @@
                           逐条明细 <span x-text="tc._showDetail ? '（收起）' : '（展开 ' + tc._result.requests.length + ' 条）'"></span>
                         </div>
                         <table x-show="tc._showDetail">
-                          <thead><tr><th>#</th><th>状态</th><th>延迟</th><th>渠道</th></tr></thead>
+                          <thead><tr><th>#</th><th>Model</th><th>Fmt</th><th>Stream</th><th>Channel</th><th>Latency</th><th>Result</th></tr></thead>
                           <tbody>
                             <template x-for="r in tc._result.requests" :key="r.index">
                               <tr>
                                 <td x-text="r.index + 1"></td>
-                                <td><span class="pill" :class="r.ok ? 'ok' : 'err'" x-text="r.status"></span></td>
-                                <td x-text="r.latencyMs + 'ms'"></td>
-                                <td x-text="r.channel || '-'"></td>
+                                <td x-text="r.model"></td>
+                                <td><span class="fmt" :class="r.format" x-text="r.format"></span></td>
+                                <td x-text="r.stream?'yes':'—'"></td>
+                                <td x-text="r.channel || '—'"></td>
+                                <td x-text="r.latencyMs!=null ? r.latencyMs+'ms' : '—'"></td>
+                                <td><span class="pill" :class="String(r.status).startsWith('ERR')?'err':'ok'" x-text="r.status"></span></td>
                               </tr>
                             </template>
                           </tbody>
@@ -992,6 +1036,8 @@ function app() {
     models: [], configurations: [], presets: [], channels: [], recent: [], sel: null, selConfig: null, toastMsg: "",
     testConfigs: [],
     testSearch: "",
+    recentFilter: { model: "", fmt: "", stream: "", channel: "", minLatency: "", result: "" },
+    recentPage: 1, recentPageSize: 50,
     editingPreset: "", presetForm: {},
     modelSearch: "", collapsedGroups: {},
     confirmState: { open:false, message:"", resolveFn:null },
@@ -1238,8 +1284,9 @@ function app() {
     async runTestConfig(tc) {
       if (!tc.targetUrl || !tc.model) return;
       tc._running = true;
-      tc._result = null;
-      tc._unlocked = false;
+      tc._result = { summary: null, requests: [] };
+      tc._unlocked = true;    // 运行者本人，实时查看进度
+      tc._showDetail = true;  // 自动展开逐条明细，边跑边刷新
 
       let res;
       try {
@@ -1269,8 +1316,6 @@ function app() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
-      const requests = [];
-      let summary = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -1281,27 +1326,19 @@ function app() {
           if (!line.trim()) continue;
           const evt = JSON.parse(line);
           if (evt.type === "progress") {
-            requests.push(evt);
+            tc._result.requests.push(evt);   // 逐条实时追加，边跑边显示(临时估计)
+          } else if (evt.type === "detail") {
+            tc._result.requests = evt.requests;   // 服务端权威明细(同 Recent Requests)，替换掉实时估计
           } else if (evt.type === "done") {
-            summary = evt.summary;
+            tc._result.summary = evt.summary;
           } else if (evt.type === "error") {
-            tc._result = { summary: null, requests: [], error: evt.message };
+            tc._result.error = evt.message;
           }
         }
       }
-      tc._result = { summary, requests };
       tc._running = false;
-
-      // save to DB if config has id
-      if (tc.id) {
-        try {
-          await fetch("/__test-configs", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: tc.id, /* just trigger result save via /__test/run above */ }),
-          });
-        } catch {}
-      }
+      // 结果已由 /__test/run 在服务端落库(setTestResult)，这里不再额外 POST——
+      // 之前那次只带 {id} 的 POST 会被 normalizeTestConfig 补成默认值，把整条测试配置冲掉，导致设定丢失。
     },
     async unlockTestConfig(tc) {
       if (!tc.id) { tc._unlocked = true; return; }
@@ -1434,6 +1471,30 @@ function app() {
       else this.toast("套用失败", false);
     },
     async pollStats() { const r = await fetch("/__stats"); this.recent = (await r.json()).recent; },
+    filteredRecent() {
+      const f = this.recentFilter;
+      return this.recent.filter(x => {
+        if (f.model && !String(x.model || "").toLowerCase().includes(f.model.toLowerCase())) return false;
+        if (f.fmt && x.format !== f.fmt) return false;
+        if (f.stream === "yes" && !x.stream) return false;
+        if (f.stream === "no" && x.stream) return false;
+        if (f.channel && !String(x.channel || "").toLowerCase().includes(f.channel.toLowerCase())) return false;
+        if (f.minLatency !== "" && f.minLatency != null && !(Number(x.latencyMs) >= Number(f.minLatency))) return false;
+        if (f.result === "ok" && String(x.result).startsWith("ERR")) return false;
+        if (f.result === "err" && !String(x.result).startsWith("ERR")) return false;
+        return true;
+      });
+    },
+    clearRecentFilter() { this.recentFilter = { model: "", fmt: "", stream: "", channel: "", minLatency: "", result: "" }; this.recentPage = 1; },
+    recentPages() { return Math.max(1, Math.ceil(this.filteredRecent().length / this.recentPageSize)); },
+    pagedRecent() {
+      const all = this.filteredRecent();
+      const page = Math.min(Math.max(1, this.recentPage), Math.max(1, Math.ceil(all.length / this.recentPageSize)));
+      const start = (page - 1) * this.recentPageSize;
+      return all.slice(start, start + this.recentPageSize);
+    },
+    recentPrev() { if (this.recentPage > 1) this.recentPage--; },
+    recentNext() { if (this.recentPage < this.recentPages()) this.recentPage++; },
     presetDefaults() {
       return { promptMode:"auto", promptTokens:100, completionTokens:30, cacheMode:"none", cacheRatio:0.5,
         cachedTokens:0, cacheCreationTokens:0, latencyMs:0, latencyMode:"fixed", latencyMin:0, latencyMax:0, latencyDist:"uniform",
