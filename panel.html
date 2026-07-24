@@ -378,6 +378,26 @@
             </div>
           </div>
         </div>
+
+        <div class="card">
+          <h2>两个都在 Docker：容器名直连（推荐）</h2>
+          <div class="card-sub">mock 和 new-api 在不同 docker 网络时，走宿主机网关(172.x)常被防火墙拦。把 mock 接进 new-api 所在的网络、用容器名互访最稳——流量全在 docker 内部走，不碰宿主机防火墙，端口用容器内部端口，重启也不变。</div>
+
+          <div class="field-label">① 把 mock 容器接进 new-api 的网络（宿主机执行一次）</div>
+          <div class="ep"><code>sudo docker network connect baota_net mock-upstream</code><button class="sm" @click="copy('sudo docker network connect baota_net mock-upstream')">Copy</button></div>
+
+          <div class="field-label">② mock 测试器「目标地址」→ 填 new-api 容器名</div>
+          <div class="ep"><code>http://new-api:3000</code><button class="sm" @click="copy('http://new-api:3000')">Copy</button></div>
+
+          <div class="field-label">③ new-api 各渠道 Base URL → 填 mock 容器名（容器内部端口）</div>
+          <template x-for="ch in channels" :key="'cn-' + ch.id">
+            <div class="ep"><code x-text="ch.name + '： http://mock-upstream:' + ch.port"></code><button class="sm" @click="copy('http://mock-upstream:' + ch.port)">Copy</button></div>
+          </template>
+          <div class="ep"><code>http://mock-upstream:8788  （主服务 / 直连渠道）</code><button class="sm" @click="copy('http://mock-upstream:8788')">Copy</button></div>
+          <div class="hint" x-show="!channels.length" style="margin:0">还没建渠道，去 Channels 标签页建一个</div>
+
+          <div class="hint">容器名 / 网络名按你实际的填：mock 容器 <code>mock-upstream</code>、new-api 容器 <code>new-api</code>、网络 <code>baota_net</code>。改完在 mock 容器里验：<code>docker exec mock-upstream getent hosts new-api</code>，能解析出 IP 就通了。</div>
+        </div>
         </div>
       </template>
 
@@ -636,6 +656,7 @@
                       <div class="url-row"><span class="url-label">本机</span><code x-text="'http://localhost:' + c.port"></code><button class="sm" @click="copy('http://localhost:' + c.port)">Copy</button></div>
                       <div class="url-row"><span class="url-label">Docker</span><code x-text="'http://host.docker.internal:' + c.port"></code><button class="sm" @click="copy('http://host.docker.internal:' + c.port)">Copy</button></div>
                       <div class="url-row"><span class="url-label">都在Docker</span><code x-text="'http://172.17.0.1:' + c.port"></code><button class="sm" @click="copy('http://172.17.0.1:' + c.port)">Copy</button></div>
+                      <div class="url-row"><span class="url-label">容器名</span><code x-text="'http://mock-upstream:' + c.port"></code><button class="sm" @click="copy('http://mock-upstream:' + c.port)">Copy</button></div>
                       <template x-for="ip in lanIps" :key="c.id + '-' + ip">
                         <div class="url-row"><span class="url-label">局域网</span><code x-text="'http://' + ip + ':' + c.port"></code><button class="sm" @click="copy('http://' + ip + ':' + c.port)">Copy</button></div>
                       </template>
