@@ -524,8 +524,12 @@
             <div class="field-label">调用路径 — 本机 Docker</div>
             <div class="ep"><code x-text="endpointFor('http://host.docker.internal:' + port)"></code><button class="sm" @click="copy(endpointFor('http://host.docker.internal:' + port))">Copy</button></div>
 
-            <div class="field-label">调用路径 — 两个都在 Docker</div>
+            <div class="field-label">调用路径 — 两个都在 Docker · 网关</div>
             <div class="ep"><code x-text="endpointFor('http://172.17.0.1:' + port)"></code><button class="sm" @click="copy(endpointFor('http://172.17.0.1:' + port))">Copy</button></div>
+
+            <div class="field-label">调用路径 — 两个都在 Docker · 容器名（推荐）</div>
+            <div class="hint" style="margin:-4px 0 6px">先把 mock 接进 new-api 所在的网络：<code>sudo docker network connect baota_net mock-upstream</code>，再用容器名互访，不碰宿主机防火墙</div>
+            <div class="ep"><code x-text="endpointFor('http://mock-upstream:' + port)"></code><button class="sm" @click="copy(endpointFor('http://mock-upstream:' + port))">Copy</button></div>
 
             <div class="field-label">调用路径 — 局域网</div>
             <template x-for="ip in lanIps" :key="ip">
@@ -734,9 +738,13 @@
             <div class="hint" style="margin:0 0 6px">new-api 在容器里，mock 在宿主机（或独立容器）</div>
             <div class="ep"><code x-text="'http://host.docker.internal:' + port"></code><button class="sm" @click="copy('http://host.docker.internal:' + port)">Copy</button></div>
 
-            <div class="field-label">两个都在 Docker</div>
-            <div class="hint" style="margin:0 0 6px">new-api 和 mock 都在容器里（同一台机器）。172.17.0.1 是 Docker 默认网桥的宿主机地址，Linux 容器内免配置直连</div>
+            <div class="field-label">两个都在 Docker · 网关</div>
+            <div class="hint" style="margin:0 0 6px">new-api 和 mock 都在容器里、且在同一 docker 默认网桥上。172.17.0.1 是网桥的宿主机地址；若两者在不同网络、或宿主机防火墙(firewalld/宝塔)拦了容器→宿主机，这条会连不上，改用下面「容器名」那条</div>
             <div class="ep"><code x-text="'http://172.17.0.1:' + port"></code><button class="sm" @click="copy('http://172.17.0.1:' + port)">Copy</button></div>
+
+            <div class="field-label">两个都在 Docker · 容器名（推荐）</div>
+            <div class="hint" style="margin:0 0 6px">new-api 和 mock 都在容器里时最稳的办法：把 mock 接进 new-api 所在的网络，用容器名互访，流量走 docker 内部、不碰宿主机防火墙，端口用容器内部端口、重启也不变。先执行一次：<code>sudo docker network connect baota_net mock-upstream</code></div>
+            <div class="ep"><code x-text="'http://mock-upstream:' + port"></code><button class="sm" @click="copy('http://mock-upstream:' + port)">Copy</button></div>
 
             <div class="field-label">局域网</div>
             <div class="hint" style="margin:0 0 6px">同事 / new-api 在同一局域网或 VPN 内（自动探测网卡地址）</div>
