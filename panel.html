@@ -504,6 +504,9 @@
             <div class="field-label">调用路径 — 本机 Docker</div>
             <div class="ep"><code x-text="endpointFor('http://host.docker.internal:' + port)"></code><button class="sm" @click="copy(endpointFor('http://host.docker.internal:' + port))">Copy</button></div>
 
+            <div class="field-label">调用路径 — 两个都在 Docker</div>
+            <div class="ep"><code x-text="endpointFor('http://172.17.0.1:' + port)"></code><button class="sm" @click="copy(endpointFor('http://172.17.0.1:' + port))">Copy</button></div>
+
             <div class="field-label">调用路径 — 局域网</div>
             <template x-for="ip in lanIps" :key="ip">
               <div class="ep"><code x-text="endpointFor('http://' + ip + ':' + port)"></code><button class="sm" @click="copy(endpointFor('http://' + ip + ':' + port))">Copy</button></div>
@@ -632,6 +635,7 @@
                     <div class="url-list">
                       <div class="url-row"><span class="url-label">本机</span><code x-text="'http://localhost:' + c.port"></code><button class="sm" @click="copy('http://localhost:' + c.port)">Copy</button></div>
                       <div class="url-row"><span class="url-label">Docker</span><code x-text="'http://host.docker.internal:' + c.port"></code><button class="sm" @click="copy('http://host.docker.internal:' + c.port)">Copy</button></div>
+                      <div class="url-row"><span class="url-label">都在Docker</span><code x-text="'http://172.17.0.1:' + c.port"></code><button class="sm" @click="copy('http://172.17.0.1:' + c.port)">Copy</button></div>
                       <template x-for="ip in lanIps" :key="c.id + '-' + ip">
                         <div class="url-row"><span class="url-label">局域网</span><code x-text="'http://' + ip + ':' + c.port"></code><button class="sm" @click="copy('http://' + ip + ':' + c.port)">Copy</button></div>
                       </template>
@@ -708,6 +712,10 @@
             <div class="field-label">本机 Docker</div>
             <div class="hint" style="margin:0 0 6px">new-api 在容器里，mock 在宿主机（或独立容器）</div>
             <div class="ep"><code x-text="'http://host.docker.internal:' + port"></code><button class="sm" @click="copy('http://host.docker.internal:' + port)">Copy</button></div>
+
+            <div class="field-label">两个都在 Docker</div>
+            <div class="hint" style="margin:0 0 6px">new-api 和 mock 都在容器里（同一台机器）。172.17.0.1 是 Docker 默认网桥的宿主机地址，Linux 容器内免配置直连</div>
+            <div class="ep"><code x-text="'http://172.17.0.1:' + port"></code><button class="sm" @click="copy('http://172.17.0.1:' + port)">Copy</button></div>
 
             <div class="field-label">局域网</div>
             <div class="hint" style="margin:0 0 6px">同事 / new-api 在同一局域网或 VPN 内（自动探测网卡地址）</div>
@@ -1523,7 +1531,32 @@ function app() {
       if (fmt === "claude") return "POST " + base + "/v1/messages";
       return "POST " + base + "/v1beta/models/" + this.sel.id + ":generateContent";
     },
-    copy(t) { navigator.clipboard?.writeText(t); this.toast("已复制"); },
+    async copy(t) {
+      let ok = false;
+      // navigator.clipboard 仅在安全上下文(HTTPS / localhost)可用；http://IP 打开时它是 undefined
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(t);
+          ok = true;
+        }
+      } catch { ok = false; }
+      // 回退：非安全上下文用临时 textarea + execCommand
+      if (!ok) {
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = t;
+          ta.setAttribute("readonly", "");
+          ta.style.position = "fixed";
+          ta.style.top = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          ta.setSelectionRange(0, ta.value.length);
+          ok = document.execCommand("copy");
+          document.body.removeChild(ta);
+        } catch { ok = false; }
+      }
+      this.toast(ok ? "已复制" : "复制失败，请手动选中复制");
+    },
     // 渠道走独立端口(不是路径前缀)，跟主服务结构完全一样——只换端口号，host/协议照抄当前访问方式。
     channelUrl(c) { return location.protocol + "//" + location.hostname + ":" + c.port; },
     async savePassword() {
