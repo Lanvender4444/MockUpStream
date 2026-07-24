@@ -114,7 +114,7 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
 
   // 渠道级门禁(渠道被关掉/偶发故障): 直接失败, 不等模型自己的延迟——渠道都连不上, 没有"先等会再失败"这回事。
   if (shouldChannelFail(channel)) {
-    const s = Number(channel.errorStatus) || 503;
+    const s = Number(channel.errorStatus) || 500;
     record({ model: parsed.model || "(unknown)", format: fmtName, stream: parsed.stream, result: `ERR ${s}(channel)`, channel: channelLabel });
     return json(fmt.buildError({ errorMessage: channel.errorMessage, errorStatus: s }), s);
   }
@@ -127,7 +127,7 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
   // 注入错误
   if (shouldInjectError(cfg)) {
     record({ model: parsed.model || cfg.id, format: fmtName, stream: parsed.stream, result: `ERR ${cfg.errorStatus}`, latencyMs, channel: channelLabel });
-    return json(fmt.buildError(cfg), Number(cfg.errorStatus));
+    return json(fmt.buildError(cfg), Number(cfg.errorStatus) || 500);
   }
 
   const modelName = parsed.model || cfg.id;

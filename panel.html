@@ -1133,7 +1133,7 @@ function app() {
         const cmd = this.TERMINAL_COMMANDS[i % this.TERMINAL_COMMANDS.length];
         for (let c = 1; c <= cmd.length; c++) { this.promptText = cmd.slice(0, c); await sleep(38); }
         await sleep(1300);
-        for (let c = cmd.length; c >= 0; c--) { this.promptText = cmd.slice(0, c); await sleep(22); }
+        for (let c = cmd.length; c > 0; c--) { this.promptText = cmd.slice(0, c); await sleep(22); }
         await sleep(300);
         i++;
       }
@@ -1277,9 +1277,10 @@ function app() {
       this.toast("已删除");
     },
     onTestChannelChange(tc) {
-      if (!tc.channelId) return;
-      const ch = this.channels.find(c => c.id === tc.channelId);
-      if (ch) tc.targetUrl = location.protocol + "//" + location.hostname + ":" + ch.port;
+      // 仅用于标记渠道名称(测试结果里的 channel 列)，不改写 targetUrl。
+      // 之前自动把 targetUrl 设成渠道直连端口(绕过 new-api)，
+      // 导致测试请求不被 new-api 视为 [UserRequest]，channel_model_health 不计数/不触发 DISABLE。
+      // 需要测 new-api 调度的用户应手动设 targetUrl 为 new-api 地址并提供有效 apiKey。
     },
     async runTestConfig(tc) {
       if (!tc.targetUrl || !tc.model) return;

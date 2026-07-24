@@ -63,7 +63,7 @@ export async function buildStream(cfg, messages, model, send, sleep) {
 }
 
 export function buildError(cfg) {
-  return { type: "error", error: { type: "mock_error", message: cfg.errorMessage } };
+  return { type: "error", error: { type: Number(cfg.errorStatus) >= 500 ? "server_error" : "invalid_request_error", message: cfg.errorMessage } };
 }
 
 export const meta = { sse: true, namedEvents: true, usageField: "usage" };

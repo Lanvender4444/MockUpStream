@@ -50,7 +50,14 @@ export async function buildStream(cfg, messages, model, send, sleep) {
 
 // 错误体
 export function buildError(cfg) {
-  return { error: { message: cfg.errorMessage, type: "mock_error", code: String(cfg.errorStatus) } };
+  return {
+    error: {
+      message: cfg.errorMessage,
+      type: Number(cfg.errorStatus) >= 500 ? "server_error" : "invalid_request_error",
+      param: null,
+      code: String(cfg.errorStatus),
+    },
+  };
 }
 
 export const meta = { sse: true, usageField: "usage" };

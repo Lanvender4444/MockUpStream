@@ -61,7 +61,7 @@ export async function buildStream(cfg, messages, model, send, sleep) {
 }
 
 export function buildError(cfg) {
-  return { error: { code: Number(cfg.errorStatus), message: cfg.errorMessage, status: "MOCK_ERROR" } };
+  return { error: { code: Number(cfg.errorStatus), message: cfg.errorMessage, status: Number(cfg.errorStatus) >= 500 ? "UNAVAILABLE" : "INVALID_ARGUMENT" } };
 }
 
 export const meta = { sse: true, usageField: "usageMetadata" };
