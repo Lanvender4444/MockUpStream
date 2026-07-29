@@ -36,11 +36,26 @@ export function computeUsage(cfg, messages) {
   const clampedCreation = Math.max(0, Math.min(cacheCreationTokens, promptTokens));
   const clampedCached = Math.max(0, Math.min(cachedTokens, promptTokens - clampedCreation));
 
+  const completionTokens = Number(cfg.completionTokens) || 0;
+  // 图片 token 总开关: imageEnabled 关闭时一律 0(响应不含任何图片 token，行为同纯文字)。
+  // 开启后再夹界: 输入图片 <= 输入总量; 输出图片 <= 输出总量。
+  // new-api 计费时会把图片输入从 promptTokens、图片输出从 completionTokens 里劈出来单独计价，
+  // 所以这里必须是"子集"关系，否则文字段会被算成负数(new-api 侧再兜底夹 0)。
+  const imageOn = !!Number(cfg.imageEnabled);
+  const imageInputTokens = imageOn
+    ? Math.max(0, Math.min(Number(cfg.imageInputTokens) || 0, promptTokens))
+    : 0;
+  const imageOutputTokens = imageOn
+    ? Math.max(0, Math.min(Number(cfg.imageOutputTokens) || 0, completionTokens))
+    : 0;
+
   return {
     promptTokens,
-    completionTokens: Number(cfg.completionTokens) || 0,
+    completionTokens,
     cachedTokens: clampedCached,
     cacheCreationTokens: clampedCreation,
+    imageInputTokens,
+    imageOutputTokens,
   };
 }
 

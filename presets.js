@@ -9,6 +9,10 @@ const base = {
   cacheRatio: 0.5,
   cachedTokens: 0,
   cacheCreationTokens: 0,
+  imageEnabled: 0,
+  imageFormat: "openai",
+  imageInputTokens: 0,
+  imageOutputTokens: 0,
   latencyMs: 0,
   latencyMode: "fixed",
   latencyMin: 0,
@@ -23,6 +27,13 @@ const base = {
 
 export const BUILTIN_PRESETS = [
   { name: "正常基准", patch: { ...base } },
+  // 生图输出：模拟"文字+图片混合输出"(真实 gemini-image 口径:总输出 1557,其中图片 1120、文字 437)。
+  // 套到任意模型上即可让它开始吐图片输出 token,方便测 new-api 的图片输出计价(imageCompletionRatio)。
+  // openai 格式 → completion_tokens_details.image_tokens;gemini 格式 → candidatesTokensDetails[IMAGE];
+  // 打生图专用端点(/v1/images/generations)→ output_tokens_details.image_tokens。
+  { name: "生图输出(图片1120+文字437)", patch: { ...base, imageEnabled: 1, imageFormat: "gemini", promptMode: "fixed", promptTokens: 8, completionTokens: 1557, imageOutputTokens: 1120 } },
+  // 纯生图:整段输出都是图片(gpt-image 生图端点口径),没有文字输出。
+  { name: "生图输出(纯图4354)", patch: { ...base, imageEnabled: 1, imageFormat: "openai", promptMode: "fixed", promptTokens: 11, completionTokens: 4354, imageOutputTokens: 4354 } },
   { name: "高缓存命中", patch: { ...base, promptMode: "fixed", promptTokens: 1000, cacheMode: "ratio", cacheRatio: 0.8 } },
   { name: "超长上下文", patch: { ...base, promptMode: "fixed", promptTokens: 210000, completionTokens: 500 } },
   { name: "超长输出", patch: { ...base, completionTokens: 3000000, chunkDelayMs: 2 } },

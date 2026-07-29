@@ -1,6 +1,10 @@
 // formats/gemini.js —— Gemini 格式: /v1beta/models/{model}:generateContent 与 :streamGenerateContent
 import { computeUsage, countTextTokens, chunkText } from "../usage.js";
 
+// 1x1 透明 PNG 占位假图，让 Gemini 生图响应"长得像一张图"(inlineData part)。
+const FAKE_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
 // Gemini 请求: { contents:[{role, parts:[{text}]}], systemInstruction? }, model 在 URL path 里
 export function parseRequest(body, url) {
   const contents = Array.isArray(body?.contents) ? body.contents : [];
@@ -26,12 +30,32 @@ function toUsageMetadata(u) {
     totalTokenCount: u.promptTokens + u.completionTokens,
   };
   if (u.cachedTokens > 0) meta.cachedContentTokenCount = u.cachedTokens;
+  // 输入模态明细: new-api 按 modality 把 IMAGE 归到图片输入、TEXT 归到文字输入。
+  if (u.imageInputTokens > 0) {
+    const textIn = Math.max(0, u.promptTokens - u.imageInputTokens);
+    meta.promptTokensDetails = [
+      { modality: "TEXT", tokenCount: textIn },
+      { modality: "IMAGE", tokenCount: u.imageInputTokens },
+    ];
+  }
+  // 输出模态明细: candidatesTokensDetails[IMAGE] 就是生图输出 token，new-api 据此单独计价。
+  // 忠实复现真实 gemini：生图响应里**只 itemize IMAGE 模态、不单列 TEXT**——文字部分隐含在
+  // candidatesTokenCount 里，由下游 completion - image 反推(所以真实响应的 text_tokens 会等于
+  // 整个 completion，除非下游修了 GetCompletionTextTokens)。
+  if (u.imageOutputTokens > 0) {
+    meta.candidatesTokensDetails = [{ modality: "IMAGE", tokenCount: u.imageOutputTokens }];
+  }
   return meta;
 }
 
-function candidate(text, finish) {
+// withImage=true 时追加一个 inlineData 图片 part(模拟 gemini 生图 / nano-banana 输出)。
+function candidate(text, finish, withImage = false) {
+  const parts = [];
+  if (text) parts.push({ text });
+  if (withImage) parts.push({ inlineData: { mimeType: "image/png", data: FAKE_PNG_B64 } });
+  if (parts.length === 0) parts.push({ text: "" });
   return {
-    content: { role: "model", parts: [{ text }] },
+    content: { role: "model", parts },
     finishReason: finish || null,
     index: 0,
   };
@@ -40,7 +64,7 @@ function candidate(text, finish) {
 export function buildResponse(cfg, messages, model) {
   const u = computeUsage(cfg, messages);
   return {
-    candidates: [candidate(cfg.content, "STOP")],
+    candidates: [candidate(cfg.content, "STOP", u.imageOutputTokens > 0)],
     usageMetadata: toUsageMetadata(u),
     modelVersion: model,
   };
@@ -54,7 +78,7 @@ export async function buildStream(cfg, messages, model, send, sleep) {
   for (let i = 0; i < chunks.length; i++) {
     if (cfg.chunkDelayMs > 0) await sleep(cfg.chunkDelayMs);
     const last = i === chunks.length - 1;
-    const obj = { candidates: [candidate(chunks[i], last ? "STOP" : null)], modelVersion: model };
+    const obj = { candidates: [candidate(chunks[i], last ? "STOP" : null, last && u.imageOutputTokens > 0)], modelVersion: model };
     if (last) obj.usageMetadata = toUsageMetadata(u);
     send(obj);
   }

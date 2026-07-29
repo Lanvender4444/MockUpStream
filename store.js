@@ -43,6 +43,18 @@ export const CONFIG_DEFAULTS = {
   cacheRatio: 0.5,
   cachedTokens: 0,
   cacheCreationTokens: 0,
+  // 图片 token(用于测 new-api 图片输入/输出分离计价)。
+  // imageEnabled: 总开关。0=不返回任何图片 token(默认，行为同纯文字)；1=按下面的数量返回。
+  // imageFormat:  仅面板提示用——openai / gemini，标注图片明细形状 + 该打哪个端点。
+  //   实际响应形状由请求打到的 endpoint 决定(见 README)，此字段不改变响应，只做选择/提示。
+  // imageInputTokens: 输入里属于图片的 token(<=promptTokens)，映射到 openai 的
+  //   prompt_tokens_details.image_tokens / gemini 的 promptTokensDetails[IMAGE]。
+  // imageOutputTokens: 输出里属于图片(生图)的 token(<=completionTokens)，映射到 openai 的
+  //   completion_tokens_details.image_tokens / gemini 的 candidatesTokensDetails[IMAGE]。
+  imageEnabled: 0,
+  imageFormat: "openai",
+  imageInputTokens: 0,
+  imageOutputTokens: 0,
   latencyMs: 0,
   latencyMode: "fixed",   // "fixed" | "range" —— range 模式下 latencyMs 不用, 看 latencyMin/Max/Dist
   latencyMin: 0,
@@ -97,6 +109,9 @@ const DEFAULT_MODELS = [
   { ...MODEL_DEFAULTS, id: "mimo-v2.5", format: "openai", vendor: "mimo" },
   { ...MODEL_DEFAULTS, id: "gemini-2.5-pro", format: "gemini", vendor: "gemini" },
   { ...MODEL_DEFAULTS, id: "claude-opus-4-8", format: "claude", vendor: "claude" },
+  // 两个生图示例模型,和常见真实网关同名,方便直接对着测图片输入/输出计价。
+  { ...MODEL_DEFAULTS, id: "gpt-image-2", format: "openai", vendor: "openai" },
+  { ...MODEL_DEFAULTS, id: "gemini-3.1-flash-image-preview", format: "gemini", vendor: "gemini" },
 ];
 
 // 每个模型至少一个默认 Configuration(不绑渠道 = 兜底)。给 grok-4.5 额外加两个绑定具体渠道的示例，
@@ -112,6 +127,11 @@ const DEFAULT_CONFIGS = [
   { id: "mimo-v2.5-default", modelId: "mimo-v2.5", name: "默认" },
   { id: "gemini-2.5-pro-default", modelId: "gemini-2.5-pro", name: "默认" },
   { id: "claude-opus-4-8-default", modelId: "claude-opus-4-8", name: "默认" },
+  // 生图示例配置:预填真实观测到的 token 口径,开箱即可测图片输出计价。
+  // gpt-image-2:纯图输出(整段 output 都是图片)。
+  { id: "gpt-image-2-default", modelId: "gpt-image-2", name: "默认", imageEnabled: 1, imageFormat: "openai", promptMode: "fixed", promptTokens: 11, completionTokens: 4354, imageOutputTokens: 4354 },
+  // gemini-3.1-flash-image-preview:混合输出(图片 1120 + 文字 437)。
+  { id: "gemini-3.1-flash-image-preview-default", modelId: "gemini-3.1-flash-image-preview", name: "默认", imageEnabled: 1, imageFormat: "gemini", promptMode: "fixed", promptTokens: 8, completionTokens: 1557, imageOutputTokens: 1120 },
 ];
 
 // 3 个示例渠道，直接演示典型的多渠道测试场景(权重/失败转移/限流降级)。

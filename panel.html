@@ -469,6 +469,29 @@
               </div>
             </div>
             <div class="row"><label>输出 token</label><input type="number" x-model.number="selConfig.completionTokens" /></div>
+            <div class="row"><label>图片 token</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="checkbox" x-model="selConfig.imageEnabled" />
+                <span x-text="selConfig.imageEnabled ? '已开启（响应携带图片 token）' : '关闭（纯文字，不返回图片 token）'"></span>
+              </label>
+            </div>
+            <template x-if="selConfig.imageEnabled">
+              <div>
+                <div class="row"><label>格式</label>
+                  <select x-model="selConfig.imageFormat">
+                    <option value="openai">openai — completion_tokens_details.image_tokens / 生图端点 output_tokens_details</option>
+                    <option value="gemini">gemini — candidatesTokensDetails[IMAGE]</option>
+                  </select>
+                </div>
+                <div class="row"><label>图片输入 token</label><input type="number" min="0" x-model.number="selConfig.imageInputTokens" /></div>
+                <div class="row"><label>图片输出 token</label><input type="number" min="0" x-model.number="selConfig.imageOutputTokens" /></div>
+                <div class="hint" style="margin:-4px 0 10px">
+                  图片 token 是「输入/输出 token」里属于图片的<b>子集</b>：图片输入≤输入 token、图片输出≤输出 token。
+                  <br>测试端点：<b x-text="selConfig.imageFormat==='gemini' ? 'POST /v1beta/models/{model}:generateContent' : 'POST /v1/chat/completions（或纯生图 /v1/images/generations）'"></b>
+                  <br><span style="color:var(--muted)">注：响应最终形状由你实际请求的端点决定，「格式」只是帮你选对端点 + 标注明细字段。</span>
+                </div>
+              </div>
+            </template>
             <div class="row"><label>缓存命中</label>
               <div class="grid2">
                 <select x-model="selConfig.cacheMode"><option value="none">none</option><option value="ratio">ratio（比例）</option><option value="fixed">fixed（固定）</option></select>
@@ -579,6 +602,24 @@
                 </div>
               </div>
               <div class="row"><label>输出 token</label><input type="number" x-model.number="presetForm.completionTokens" /></div>
+              <div class="row"><label>图片 token</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                  <input type="checkbox" x-model="presetForm.imageEnabled" />
+                  <span x-text="presetForm.imageEnabled ? '已开启' : '关闭'"></span>
+                </label>
+              </div>
+              <template x-if="presetForm.imageEnabled">
+                <div>
+                  <div class="row"><label>格式</label>
+                    <select x-model="presetForm.imageFormat">
+                      <option value="openai">openai</option>
+                      <option value="gemini">gemini</option>
+                    </select>
+                  </div>
+                  <div class="row"><label>图片输入 token</label><input type="number" min="0" x-model.number="presetForm.imageInputTokens" /></div>
+                  <div class="row"><label>图片输出 token</label><input type="number" min="0" x-model.number="presetForm.imageOutputTokens" /></div>
+                </div>
+              </template>
               <div class="row"><label>缓存命中</label>
                 <div class="grid2">
                   <select x-model="presetForm.cacheMode"><option value="none">none</option><option value="ratio">ratio</option><option value="fixed">fixed</option></select>
@@ -1535,7 +1576,8 @@ function app() {
     recentNext() { if (this.recentPage < this.recentPages()) this.recentPage++; },
     presetDefaults() {
       return { promptMode:"auto", promptTokens:100, completionTokens:30, cacheMode:"none", cacheRatio:0.5,
-        cachedTokens:0, cacheCreationTokens:0, latencyMs:0, latencyMode:"fixed", latencyMin:0, latencyMax:0, latencyDist:"uniform",
+        cachedTokens:0, cacheCreationTokens:0, imageEnabled:0, imageFormat:"openai", imageInputTokens:0, imageOutputTokens:0,
+        latencyMs:0, latencyMode:"fixed", latencyMin:0, latencyMax:0, latencyDist:"uniform",
         chunkDelayMs:40, errorEnabled:0, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
     },
     newPreset() { this.editingPreset = "__new__"; this.presetForm = { name:"", ...this.presetDefaults() }; },
