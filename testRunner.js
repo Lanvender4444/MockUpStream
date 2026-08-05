@@ -36,7 +36,7 @@ const REQUEST_TIMEOUT_MS = 30000;
 // 流式：读到第一个 chunk 就记"首包延迟"；captureBody=false 时读完剩余流丢弃(省内存)；
 //       captureBody=true 时把所有 chunk 解码拼接成完整原始 SSE 文本存进 result.body，
 //       此时会等流真正读完才返回(单次模式本来就该等完整内容，不是批量模式的"越快越好")。
-async function runSingleRequest({ baseUrl, format, model, token, prompt, stream, index, captureBody, channel }) {
+async function runSingleRequest({ baseUrl, format, model, token, prompt, stream, index, captureBody, channel, clientAbort, disconnectAfterChunks }) {
   const { path, body } = buildRequestBody(format, model, prompt, stream);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -58,6 +58,23 @@ async function runSingleRequest({ baseUrl, format, model, token, prompt, stream,
       const first = await reader.read(); // 首包
       const latencyMs = Math.round(performance.now() - start);
       const result = { index, ok: res.ok, status: String(res.status), latencyMs, channel };
+
+      // 下游断开模拟：收到首包(及少量后续帧)后，主动掐断到 new-api 的连接，
+      // 让 new-api 侧看到"客户端断开" → client_gone。这里是"故意"的断开，故 ok=false、status=client_abort。
+      if (clientAbort) {
+        let readCount = first.done ? 0 : 1;
+        const need = Math.max(1, Number(disconnectAfterChunks) || 2);
+        try {
+          while (readCount < need) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            readCount++;
+          }
+        } catch {}
+        try { await reader.cancel(); } catch {}
+        controller.abort();
+        return { ...result, ok: false, status: "client_abort" };
+      }
 
       if (captureBody) {
         let text = first.value ? decoder.decode(first.value, { stream: true }) : "";
@@ -116,7 +133,7 @@ function summarize(requests) {
 // 并发 worker pool，向指定 endpoint 发 count 条请求。
 // 每条完成立即 onEvent(progress)，是真实完成速度。
 export async function runTest(opts, onEvent) {
-  const { baseUrl, format, model, token, prompt, stream, count, concurrency, captureBody, channel } = opts;
+  const { baseUrl, format, model, token, prompt, stream, count, concurrency, captureBody, channel, clientAbort, disconnectAfterChunks } = opts;
   const requests = new Array(count);
   let nextIndex = 0;
 
@@ -124,7 +141,7 @@ export async function runTest(opts, onEvent) {
     while (true) {
       const i = nextIndex++;
       if (i >= count) return;
-      const result = await runSingleRequest({ baseUrl, format, model, token, prompt, stream, index: i, captureBody, channel });
+      const result = await runSingleRequest({ baseUrl, format, model, token, prompt, stream, index: i, captureBody, channel, clientAbort, disconnectAfterChunks });
       requests[i] = result;
       onEvent({ type: "progress", ...result });
     }

@@ -26,6 +26,7 @@ import * as openaiImage from "./formats/openai_image.js";
 import * as claude from "./formats/claude.js";
 import * as gemini from "./formats/gemini.js";
 import * as testRunner from "./testRunner.js";
+import { runLostUpdateTest } from "./lostUpdate.js";
 
 const PORT = Number(process.env.MOCK_PORT || 8788);
 const TLS = resolveTls();
@@ -142,28 +143,69 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
 
   // 流式 (SSE)
   const enc = new TextEncoder();
+  // 流式故障注入: 发够 faultAfter 个帧后, stall=卡死不关连接 / abort=直接中断连接。
+  // 用于测 new-api 对"上游停止输出/上游断开"与"下游(客户端)断开"的区分。
+  const fault = String(cfg.streamFault || "none");
+  const faultAfter = Math.max(0, Number(cfg.faultAfterChunks) || 0);
+  const STALL = Symbol("stall");
+  const ABORT = Symbol("abort");
+  let faultResult = "stream";
   const stream = new ReadableStream({
     async start(controller) {
-      const push = (line) => controller.enqueue(enc.encode(line));
-      if (fmtName === "claude") {
-        // Claude: 具名事件  event: X\n data: {...}\n\n
-        await fmt.buildStream(cfg, parsed.messages, modelName, (event, data) => {
-          push(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-        }, sleep);
-      } else {
-        // openai / gemini: data: {...}\n\n ; openai 末尾 send("[DONE]")
-        await fmt.buildStream(cfg, parsed.messages, modelName, (obj) => {
-          if (obj === "[DONE]") push("data: [DONE]\n\n");
-          else push(`data: ${JSON.stringify(obj)}\n\n`);
-        }, sleep);
+      let sent = 0;
+      const push = (line) => {
+        // 在发送前判断: 已发够 faultAfter 个帧且配置了故障 → 抛出哨兵中断 buildStream。
+        if (fault !== "none" && sent >= faultAfter) {
+          throw fault === "abort" ? ABORT : STALL;
+        }
+        controller.enqueue(enc.encode(line));
+        sent++;
+      };
+      try {
+        if (fmtName === "claude") {
+          // Claude: 具名事件  event: X\n data: {...}\n\n
+          await fmt.buildStream(cfg, parsed.messages, modelName, (event, data) => {
+            push(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+          }, sleep);
+        } else {
+          // openai / gemini: data: {...}\n\n ; openai 末尾 send("[DONE]")
+          await fmt.buildStream(cfg, parsed.messages, modelName, (obj) => {
+            if (obj === "[DONE]") push("data: [DONE]\n\n");
+            else push(`data: ${JSON.stringify(obj)}\n\n`);
+          }, sleep);
+        }
+        controller.close();
+      } catch (e) {
+        if (e === STALL) {
+          // 上游中途卡死: 已发的帧保留, 之后既不再发也不关闭连接, 让连接一直悬挂,
+          // 由下游(new-api)的 STREAMING_TIMEOUT 兜底 → 判为 timeout / 上游中断。
+          // 安全网: 5 分钟后兜底关闭, 避免连接永久悬挂占资源。
+          faultResult = `stall@${sent}`;
+          setTimeout(() => { try { controller.close(); } catch {} }, 5 * 60 * 1000);
+          return; // 保持 stream 打开(不 close/不 error)
+        }
+        if (e === ABORT) {
+          // 上游中途断开: 干净地关闭 stream。因为响应头谎报了一个很大的 Content-Length(见下方 headers)，
+          // 实际发出的字节数远小于声明值 → new-api 按 Content-Length 还等着更多数据，读到连接提前结束
+          // → Go 的 http 客户端返回 io.ErrUnexpectedEOF → new-api 判为 scanner_error(上游断开)。
+          // 用 close 而非 error：既能造出"截断"，又不会让 Bun 打印一坨预期内的错误栈。
+          faultResult = `abort@${sent}`;
+          try { controller.close(); } catch {}
+          return;
+        }
+        throw e;
       }
-      controller.close();
     },
   });
-  record({ model: modelName, format: fmtName, stream: true, result: "stream", latencyMs, channel: channelLabel });
-  return new Response(stream, {
-    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Mock-Upstream": "1" },
-  });
+  record({ model: modelName, format: fmtName, stream: true, result: faultResult, latencyMs, channel: channelLabel });
+  const streamHeaders = { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Mock-Upstream": "1" };
+  if (fault === "abort") {
+    // 上游断开专用: 谎报一个远大于实际输出的 Content-Length，配合上面"发几帧就 close"，
+    // 让 new-api 读到"字节数不足、连接提前结束" → io.ErrUnexpectedEOF → scanner_error(上游断开)。
+    // 这样才能稳定复现真实截断(而不是被当成干净 EOF 的正常结束)。
+    streamHeaders["Content-Length"] = "10000000";
+  }
+  return new Response(stream, { headers: streamHeaders });
 }
 
 function usageTag(fmtName, resp) {
@@ -206,6 +248,8 @@ function startChannelListener(channel) {
   try {
     const srv = Bun.serve({
       port: channel.port,
+      // 调大空闲超时(默认10s)：上游卡死(stall)时 mock 故意不发数据，避免 Bun 比 new-api 的 STREAMING_TIMEOUT 先把连接掐掉。
+      idleTimeout: 255,
       ...(TLS ? { tls: { cert: Bun.file(TLS.certPath), key: Bun.file(TLS.keyPath) } } : {}),
       async fetch(req) {
         const url = new URL(req.url);
@@ -231,6 +275,8 @@ function stopChannelListener(channelId) {
 
 Bun.serve({
   port: PORT,
+  // 调大空闲超时(默认10s)：上游卡死(stall)时 mock 故意不发数据，避免 Bun 比 new-api 的 STREAMING_TIMEOUT 先把连接掐掉。
+  idleTimeout: 255,
   ...(TLS ? { tls: { cert: Bun.file(TLS.certPath), key: Bun.file(TLS.keyPath) } } : {}),
   async fetch(req, server) {
     const url = new URL(req.url);
@@ -467,27 +513,55 @@ Bun.serve({
               }
             };
 
-            const { summary, requests } = await testRunner.runTest(
-              {
-                baseUrl: targetUrl,
-                format: b.format || "openai",
-                model: b.model,
-                token: b.apiKey || "",
-                prompt: b.prompt || "",
-                stream: !!b.stream,
-                count,
-                concurrency,
-                captureBody,
-                channel: channelLabel,
-              },
-              // testRunner 的 progress 只当"有一条完成了"的触发器，去捞对应的权威记录；
-              // done/error 原样透传。
-              (evt) => {
-                if (evt.type === "progress") drainRecords();
-                else if (evt.type === "done") { drainRecords(); push(evt); }
-                else push(evt);
+            // 下游断开场景：强制流式 + 让测试器收到首包后主动掐断，制造 new-api 的 client_gone。
+            const clientAbort = b.disconnectMode === "downstream";
+            const stream = clientAbort ? true : !!b.stream;
+
+            // 关键：下游断开要可靠复现，new-api 必须"还在流式传输中"客户端才掐断。
+            // 默认响应太短，new-api 往往在察觉断开前就收到 [DONE] 记成正常。
+            // 所以这里临时把目标模型的 mock 配置调慢(只改 chunkDelayMs、并关掉上游故障)，
+            // 让流拉长到几秒，跑完在 finally 里逐条原样还原，不动其它字段。
+            let savedCfgs = null;
+            if (clientAbort && b.model) {
+              try {
+                savedCfgs = store.getConfigsForModel(b.model);
+                for (const cfg of savedCfgs) {
+                  await store.upsertConfig({ ...cfg, chunkDelayMs: 700, streamFault: "none", faultAfterChunks: 0 });
+                }
+              } catch (e) { savedCfgs = null; }
+            }
+
+            let summary, requests;
+            try {
+              ({ summary, requests } = await testRunner.runTest(
+                {
+                  baseUrl: targetUrl,
+                  format: b.format || "openai",
+                  model: b.model,
+                  token: b.apiKey || "",
+                  prompt: b.prompt || "",
+                  stream,
+                  count,
+                  concurrency,
+                  captureBody,
+                  channel: channelLabel,
+                  clientAbort,
+                  disconnectAfterChunks: 2,
+                },
+                // testRunner 的 progress 只当"有一条完成了"的触发器，去捞对应的权威记录；
+                // done/error 原样透传。
+                (evt) => {
+                  if (evt.type === "progress") drainRecords();
+                  else if (evt.type === "done") { drainRecords(); push(evt); }
+                  else push(evt);
+                }
+              ));
+            } finally {
+              // 还原被临时调慢的配置
+              if (savedCfgs) {
+                for (const cfg of savedCfgs) { try { await store.upsertConfig(cfg); } catch {} }
               }
-            );
+            }
             drainRecords(); // 收尾，捞掉最后可能晚到的记录
 
             // 最终再按完整时间窗重排一次(index 连续、无遗漏)，替换实时结果。
@@ -509,6 +583,25 @@ Bun.serve({
         },
       });
 
+      return new Response(sse, { headers: { "Content-Type": "application/x-ndjson" } });
+    }
+
+    // ---------- 丢失更新漏洞测试 ----------
+    // 并发跑两条流：
+    //   ① 计费流 = testRunner.runTest（朝 targetUrl 发 chat 请求）
+    //   ② 资料流 = 同时往 luAdminUrl/api/user/* 刷 profile 更新（PUT /api/user/self 等）
+    // 跑前/后用管理员身份读 GET /api/user/{luUserId}，对比 used_quota / request_count 增量判定是否被覆盖。
+    if (p === "/__test/lost-update" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      const sse = new ReadableStream({
+        async start(controller) {
+          const enc = new TextEncoder();
+          const push = (obj) => controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
+          try { await runLostUpdateTest(b, push); }
+          catch (e) { push({ type: "error", message: e?.message || String(e) }); }
+          controller.close();
+        },
+      });
       return new Response(sse, { headers: { "Content-Type": "application/x-ndjson" } });
     }
 

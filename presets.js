@@ -19,6 +19,8 @@ const base = {
   latencyMax: 0,
   latencyDist: "uniform",
   chunkDelayMs: 40,
+  streamFault: "none",
+  faultAfterChunks: 0,
   errorEnabled: 0,
   errorStatus: 0,
   errorRate: 0,
@@ -43,4 +45,12 @@ export const BUILTIN_PRESETS = [
   // 确保打到 new-api 时被 IsExcludedError 判定为 ErrorLevelFailed，真正计入渠道失败率/触发熔断——
   // 用来测"渠道失败率死"这类场景，而不是被 new-api 悄悄排除、误以为测试生效了实际上没生效。
   { name: "渠道失败(计入 new-api 失败率)", patch: { ...base, errorEnabled: 1, errorStatus: 500, errorRate: 100, errorMessage: "mock upstream failure for testing timeout-death review" } },
+  // ↓↓↓ 测 new-api「区分下游 vs 上游断开」的三个场景 ↓↓↓
+  // 上游中途卡死: 发 3 帧后不再吐字也不关连接, 需把 new-api 的 STREAMING_TIMEOUT 调小(如 10s)才好观察,
+  // 触发后 new-api 判 timeout → 页面「上游中断」。
+  { name: "上游中途卡死(stall)", patch: { ...base, completionTokens: 200, chunkDelayMs: 50, streamFault: "stall", faultAfterChunks: 3 } },
+  // 上游中途断开: 发 3 帧后直接中断连接(未发 [DONE]), 立即触发, new-api 判 scanner_error/eof → 视情况「上游中断」。
+  { name: "上游中途断开(abort)", patch: { ...base, completionTokens: 200, chunkDelayMs: 50, streamFault: "abort", faultAfterChunks: 3 } },
+  // 慢速长输出: 每帧间隔 300ms 的长流, 给你足够时间在客户端(curl)Ctrl+C, 制造下游断开 → new-api 判 client_gone → 页面「下游断开」。
+  { name: "慢速长输出(测下游断开)", patch: { ...base, completionTokens: 2000, chunkDelayMs: 300 } },
 ];

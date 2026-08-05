@@ -517,6 +517,30 @@
             </div>
             <div class="hint" x-show="selConfig.latencyMode==='range'" style="margin:-4px 0 10px">均匀：区间内等概率；正态：以区间中点为均值、区间的六分之一为标准差，两端极小概率的尾部会被夹回区间内，不会溢出。每次请求都会重新采样一次延迟值，可以在「Recent Requests」里看实际用了多少 ms。</div>
             <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="selConfig.chunkDelayMs" /></div>
+            <div class="row"><label>上游断开模拟</label>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;flex:1">
+                <button class="sm" :class="selConfig.streamFault==='stall' ? 'primary' : ''"
+                  @click="selConfig.streamFault='stall'; if(!selConfig.faultAfterChunks) selConfig.faultAfterChunks=3; saveConfig()"
+                  title="发几帧后卡死：不再输出也不关连接，让 new-api 命中 STREAMING_TIMEOUT → 判 timeout / 上游中断">上游卡死</button>
+                <button class="sm" :class="selConfig.streamFault==='abort' ? 'primary' : ''"
+                  @click="selConfig.streamFault='abort'; if(!selConfig.faultAfterChunks) selConfig.faultAfterChunks=3; saveConfig()"
+                  title="发几帧后直接中断连接(未发 [DONE]) → new-api 判 scanner_error → 上游中断">上游断开</button>
+                <button class="sm" :class="(!selConfig.streamFault || selConfig.streamFault==='none') ? 'primary' : ''"
+                  @click="selConfig.streamFault='none'; selConfig.faultAfterChunks=0; saveConfig()"
+                  title="清除上游断开模拟，恢复正常流式">恢复正常</button>
+              </div>
+            </div>
+            <div class="row" x-show="selConfig.streamFault && selConfig.streamFault!=='none'"><label>触发前发送帧数</label>
+              <input type="number" min="0" x-model.number="selConfig.faultAfterChunks" @change="saveConfig()" />
+            </div>
+            <div class="hint" x-show="selConfig.streamFault && selConfig.streamFault!=='none'" style="margin:-4px 0 10px">
+              当前：<b x-text="selConfig.streamFault==='stall' ? '上游卡死(stall)' : '上游断开(abort)'"></b>，先正常发
+              <span x-text="selConfig.faultAfterChunks"></span> 帧再触发。「上游卡死」需把 new-api 的
+              <code>STREAMING_TIMEOUT</code> 调小(如 10s)才好观察超时。
+            </div>
+            <div class="hint" x-show="!selConfig.streamFault || selConfig.streamFault==='none'" style="margin:-4px 0 10px">
+              这里只管「上游」断开。要测「下游断开(客户端断开 / client_gone)」，去 <b>Test</b> 标签页，「断开场景」选「下游断开」即可，无需在这里改。
+            </div>
             <div class="row"><label>启用错误注入</label>
               <button @click="selConfig.errorEnabled = !selConfig.errorEnabled; saveConfig()" :class="selConfig.errorEnabled ? 'primary' : ''" class="sm" x-text="selConfig.errorEnabled ? '已启用' : '已停用'"></button>
             </div>
@@ -873,6 +897,16 @@
               </div>
               <template x-if="!tc._collapsed">
               <div>
+              <div class="row"><label>测试类型</label>
+                <select x-model="tc.testType">
+                  <option value="billing">计费压测（现有）</option>
+                  <option value="lost_update">丢失更新漏洞测试（new-api user.Update 覆盖计费）</option>
+                </select>
+              </div>
+              <div class="hint" x-show="tc.testType==='lost_update'" style="margin:-4px 0 10px">
+                并发跑两路：① 计费流（chat 请求）② 资料流（同时狂刷 /api/user/self 等），跑完对比 used_quota / request_count 增量。<br/>
+                先在 new-api 后台手动建一个普通用户、给大额度、建 token，把 <b>用户 ID</b> 填到 luUserId，<b>token</b> 填到上面的 API Key。
+              </div>
               <div class="row"><label>目标地址</label><input x-model="tc.targetUrl" placeholder="http://192.168.1.100:3000" /></div>
               <div class="row"><label>模型名</label><input x-model="tc.model" placeholder="grok-4.5" /></div>
               <div class="row"><label>请求格式</label>
@@ -880,32 +914,68 @@
                   <option value="openai">OpenAI</option><option value="claude">Claude</option><option value="gemini">Gemini</option>
                 </select>
               </div>
-              <div class="row"><label>API Key</label><input x-model="tc.apiKey" placeholder="sk-xxx" /></div>
-              <div class="row"><label>渠道</label>
-                <select x-model="tc.channelId" @change="onTestChannelChange(tc)">
-                  <option value="">-- 不指定 --</option>
-                  <template x-for="ch in channels" :key="ch.id">
-                    <option :value="ch.id" x-text="ch.name + ' :' + ch.port"></option>
-                  </template>
-                </select>
-              </div>
-              <div class="row"><label>Prompt</label><input x-model="tc.prompt" placeholder="不填走默认值「测试」" /></div>
-              <div class="row"><label>Stream</label><input type="checkbox" x-model="tc.stream" /></div>
-              <div class="mode-switch">
-                <button :class="{active: tc.requestMode==='batch'}" @click="tc.requestMode='batch'; tc.count=tc._lastBatch||20; tc.concurrency=5">批量</button>
-                <button :class="{active: tc.requestMode==='single'}" @click="tc.requestMode='single'; tc._lastBatch=tc.count; tc.count=1; tc.concurrency=1">单次</button>
-              </div>
-              <template x-if="tc.requestMode==='batch'">
+              <div class="row"><label>API Key</label><input x-model="tc.apiKey" placeholder="sk-xxx（lost_update 时填被测用户自己的系统令牌）" /></div>
+              <template x-if="tc.testType==='billing'">
                 <div>
+                  <div class="row"><label>渠道</label>
+                    <select x-model="tc.channelId" @change="onTestChannelChange(tc)">
+                      <option value="">-- 不指定 --</option>
+                      <template x-for="ch in channels" :key="ch.id">
+                        <option :value="ch.id" x-text="ch.name + ' :' + ch.port"></option>
+                      </template>
+                    </select>
+                  </div>
+                  <div class="row"><label>Prompt</label><input x-model="tc.prompt" placeholder="不填走默认值「测试」" /></div>
+                  <div class="row"><label>Stream</label><input type="checkbox" x-model="tc.stream" /></div>
+                  <div class="row"><label>断开场景</label>
+                    <select x-model="tc.disconnectMode">
+                      <option value="none">关闭（正常请求）</option>
+                      <option value="downstream">下游断开（客户端中途掐断 → 测 new-api client_gone）</option>
+                    </select>
+                  </div>
+                  <div class="hint" x-show="tc.disconnectMode==='downstream'" style="margin:-4px 0 10px">
+                    选此项会强制流式，并在收到首包后主动断开到目标(new-api)的连接，模拟客户端中途关闭 → new-api 记为 <b>client_gone / 下游断开</b>。
+                    「上游卡死 / 上游断开」不在这里——它们是 mock 作为<b>上游</b>的响应行为，去 <b>Models → 选模型 → Configuration</b> 里点对应按钮。
+                  </div>
+                  <div class="mode-switch">
+                    <button :class="{active: tc.requestMode==='batch'}" @click="tc.requestMode='batch'; tc.count=tc._lastBatch||20; tc.concurrency=5">批量</button>
+                    <button :class="{active: tc.requestMode==='single'}" @click="tc.requestMode='single'; tc._lastBatch=tc.count; tc.count=1; tc.concurrency=1">单次</button>
+                  </div>
+                  <template x-if="tc.requestMode==='batch'">
+                    <div>
+                      <div class="row"><label>条数</label><input type="number" min="1" max="1000" x-model.number="tc.count" /></div>
+                      <div class="row"><label>并发数</label><input type="number" min="1" max="50" x-model.number="tc.concurrency" /></div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+              <template x-if="tc.testType==='lost_update'">
+                <div style="border-top:1px dashed var(--border); padding-top:8px; margin-bottom:6px">
+                  <div class="field-label" style="margin-top:0">计费流参数</div>
                   <div class="row"><label>条数</label><input type="number" min="1" max="1000" x-model.number="tc.count" /></div>
                   <div class="row"><label>并发数</label><input type="number" min="1" max="50" x-model.number="tc.concurrency" /></div>
+                  <div class="field-label">资料流参数</div>
+                  <div class="row"><label>漏洞路径</label>
+                    <select x-model="tc.luPath">
+                      <option value="self">PUT /api/user/self（sidebar_modules，推荐）</option>
+                      <option value="token">GET /api/user/token（生成系统令牌）</option>
+                      <option value="setting">PUT /api/user/setting（通知偏好）</option>
+                    </select>
+                  </div>
+                  <div class="row"><label>资料次数</label><input type="number" min="1" max="100000" x-model.number="tc.luProfileCount" /></div>
+                  <div class="row"><label>资料并发</label><input type="number" min="1" max="50" x-model.number="tc.luProfileConcurrency" /></div>
+                  <div class="field-label">被测用户</div>
+                  <div class="row"><label>用户 ID</label><input x-model="tc.luUserId" placeholder="new-api 后台手动建好的用户 id" /></div>
+                  <div class="row"><label>管理地址</label><input x-model="tc.luAdminUrl" placeholder="留空 = 用上面的目标地址" /></div>
+                  <div class="row"><label>管理员</label><input x-model="tc.luAdminUser" placeholder="root" /></div>
+                  <div class="row"><label>管理密码</label><input type="password" x-model="tc.luAdminPass" placeholder="123456" /></div>
                 </div>
               </template>
               <div class="row"><label>访问密码</label>
                 <input type="password" x-model="tc._newPwd" placeholder="留空则不设密码 / 清空保存可移除密码" />
               </div>
               <div class="btns" style="gap:6px">
-                <button class="primary" @click="runTestConfig(tc)" :disabled="tc._running || !tc.targetUrl || !tc.model">
+                <button class="primary" @click="tc.testType==='lost_update' ? runLostUpdateTest(tc) : runTestConfig(tc)" :disabled="tc._running || !tc.targetUrl || !tc.model">
                   <span x-text="tc._running ? '测试中…' : '运行'"></span>
                 </button>
                 <button @click="saveTestConfig(tc)">保存</button>
@@ -951,6 +1021,49 @@
                         &nbsp;max <b x-text="tc._result.summary.latency?.max"></b>
                         &nbsp;p95 <b x-text="tc._result.summary.latency?.p95"></b>
                       </div>
+                    </div>
+                  </template>
+
+                  <!-- lost_update 专属结果块 -->
+                  <template x-if="tc._result.lostUpdate">
+                    <div style="margin-top:14px; border-top:1px solid var(--border); padding-top:14px">
+                      <div class="field-label">丢失更新判定</div>
+                      <template x-if="tc._result._phase">
+                        <div class="card-sub" style="color:var(--mut)" x-text="tc._result._phase"></div>
+                      </template>
+                      <template x-if="!tc._result._phase">
+                        <div>
+                          <div class="card-sub">
+                            计费流 <b x-text="tc._result.lostUpdate.billing.ok"></b>/<b x-text="tc._result.lostUpdate.billing.total"></b> 成功
+                            &nbsp;·&nbsp; 资料流 <b x-text="tc._result.lostUpdate.profile.ok"></b>/<b x-text="tc._result.lostUpdate.profile.total"></b> 成功
+                            （路径 <code x-text="tc._result.lostUpdate.luPath"></code>）
+                          </div>
+                          <table>
+                            <thead><tr><th>指标</th><th>期望</th><th>实际</th><th>丢失</th><th>丢失率</th></tr></thead>
+                            <tbody>
+                              <tr>
+                                <td>used_quota</td>
+                                <td x-text="tc._result.lostUpdate.usedExpected"></td>
+                                <td x-text="tc._result.lostUpdate.usedActual"></td>
+                                <td :style="{color: tc._result.lostUpdate.usedLost>0 ? 'var(--err)' : 'var(--ok)'}" x-text="tc._result.lostUpdate.usedLost"></td>
+                                <td x-text="tc._result.lostUpdate.usedPct.toFixed(2) + '%'"></td>
+                              </tr>
+                              <tr>
+                                <td>request_count</td>
+                                <td x-text="tc._result.lostUpdate.reqExpected"></td>
+                                <td x-text="tc._result.lostUpdate.reqActual"></td>
+                                <td :style="{color: tc._result.lostUpdate.reqLost>0 ? 'var(--err)' : 'var(--ok)'}" x-text="tc._result.lostUpdate.reqLost"></td>
+                                <td x-text="tc._result.lostUpdate.reqPct.toFixed(2) + '%'"></td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          <div class="card-sub" style="margin-top:10px">
+                            单次成本 C = <b x-text="tc._result.lostUpdate.C"></b>
+                            &nbsp;·&nbsp; 结论：
+                            <span class="pill" :class="tc._result.lostUpdate.ok ? 'ok' : 'err'" x-text="tc._result.lostUpdate.verdict"></span>
+                          </div>
+                        </div>
+                      </template>
                     </div>
                   </template>
 
@@ -1277,6 +1390,15 @@ function app() {
       this.testConfigs = (list || []).map(c => ({
         ...c,
         stream: !!c.stream,
+        testType: c.testType || "billing",
+        disconnectMode: c.disconnectMode || "none",
+        luAdminUrl: c.luAdminUrl || "",
+        luAdminUser: c.luAdminUser || "root",
+        luAdminPass: c.luAdminPass || "123456",
+        luUserId: c.luUserId || "",
+        luPath: c.luPath || "self",
+        luProfileConcurrency: c.luProfileConcurrency || 3,
+        luProfileCount: c.luProfileCount || 5000,
         _result: null,
         _unlocked: false,
         _running: false,
@@ -1298,9 +1420,18 @@ function app() {
         channelId: "",
         prompt: "",
         stream: false,
+        testType: "billing",
+        disconnectMode: "none",
         requestMode: "batch",
         count: 20,
         concurrency: 5,
+        luAdminUrl: "",
+        luAdminUser: "root",
+        luAdminPass: "123456",
+        luUserId: "",
+        luPath: "self",
+        luProfileConcurrency: 3,
+        luProfileCount: 5000,
         hasPassword: false,
         _result: null,
         _unlocked: false,
@@ -1324,9 +1455,18 @@ function app() {
         channelId: tc.channelId,
         prompt: tc.prompt,
         stream: tc.stream ? 1 : 0,
+        testType: tc.testType || "billing",
+        disconnectMode: tc.disconnectMode || "none",
         requestMode: tc.requestMode,
         count: tc.count,
         concurrency: tc.concurrency,
+        luAdminUrl: tc.luAdminUrl,
+        luAdminUser: tc.luAdminUser,
+        luAdminPass: tc.luAdminPass,
+        luUserId: tc.luUserId,
+        luPath: tc.luPath,
+        luProfileConcurrency: tc.luProfileConcurrency,
+        luProfileCount: tc.luProfileCount,
       };
       if (tc._newPwd !== undefined) body.password = tc._newPwd;
       const r = await fetch("/__test-configs", {
@@ -1380,6 +1520,7 @@ function app() {
             channelId: tc.channelId,
             prompt: tc.prompt,
             stream: tc.stream,
+            disconnectMode: tc.disconnectMode || "none",
             requestMode: tc.requestMode,
             count: tc.count,
             concurrency: tc.concurrency,
@@ -1418,6 +1559,73 @@ function app() {
       tc._running = false;
       // 结果已由 /__test/run 在服务端落库(setTestResult)，这里不再额外 POST——
       // 之前那次只带 {id} 的 POST 会被 normalizeTestConfig 补成默认值，把整条测试配置冲掉，导致设定丢失。
+    },
+    async runLostUpdateTest(tc) {
+      if (!tc.targetUrl || !tc.model) return;
+      if (tc.testType !== "lost_update") return;
+      tc._running = true;
+      tc._result = { summary: null, lostUpdate: null, _phase: "准备中…", _billing: { done: 0, total: tc.count }, _profile: { done: 0, total: tc.luProfileCount } };
+      let res;
+      try {
+        res = await fetch("/__test/lost-update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            targetUrl: tc.targetUrl,
+            model: tc.model,
+            format: tc.format,
+            apiKey: tc.apiKey,
+            prompt: tc.prompt,
+            stream: tc.stream,
+            count: tc.count,
+            concurrency: tc.concurrency,
+            luAdminUrl: tc.luAdminUrl,
+            luAdminUser: tc.luAdminUser,
+            luAdminPass: tc.luAdminPass,
+            luUserId: tc.luUserId,
+            luPath: tc.luPath,
+            luProfileConcurrency: tc.luProfileConcurrency,
+            luProfileCount: tc.luProfileCount,
+            configId: tc.id || undefined,
+          }),
+        });
+      } catch (e) {
+        tc._running = false;
+        tc._result = { summary: null, lostUpdate: null, error: "请求失败: " + e.message };
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const evt = JSON.parse(line);
+          if (evt.type === "phase") {
+            tc._result._phase = evt.message;
+          } else if (evt.type === "billingProgress") {
+            tc._result._billing = { done: evt.done, total: evt.total, ok: evt.ok, status: evt.status };
+            tc._result._phase = `压测中… 计费 ${evt.done}/${evt.total}（${evt.ok ? "OK" : "ERR " + evt.status}）`;
+          } else if (evt.type === "billingDone") {
+            tc._result.summary = evt.summary;
+          } else if (evt.type === "profileProgress") {
+            tc._result._profile = { done: evt.done, total: evt.total, ok: evt.ok, fail: evt.fail };
+          } else if (evt.type === "done") {
+            tc._result.summary = evt.summary;
+            tc._result.lostUpdate = evt.lostUpdate;
+            tc._result._phase = null;
+          } else if (evt.type === "error") {
+            tc._result.error = evt.message;
+            tc._result._phase = null;
+          }
+        }
+      }
+      tc._running = false;
     },
     async unlockTestConfig(tc) {
       if (!tc.id) { tc._unlocked = true; return; }

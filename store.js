@@ -61,6 +61,15 @@ export const CONFIG_DEFAULTS = {
   latencyMax: 0,
   latencyDist: "uniform", // "uniform" | "normal" —— 只在 latencyMode==="range" 时生效
   chunkDelayMs: 40,
+  // 流式故障注入(测 new-api 区分下游/上游断开)：
+  //   streamFault: "none" | "stall" | "abort"
+  //     stall = 发够 faultAfterChunks 个 SSE 帧后"卡死"(不再发也不关闭连接)，
+  //             让下游(new-api)命中 STREAMING_TIMEOUT → 判为 timeout / 上游中断。
+  //     abort = 发够 faultAfterChunks 个帧后直接把响应 error 掉(连接异常中断)，
+  //             下游看到"未收到 [DONE] 的截断流"。
+  //   faultAfterChunks: 触发故障前先正常发多少个帧(含首个 role 帧)。0 = 立刻触发。
+  streamFault: "none",
+  faultAfterChunks: 0,
   errorEnabled: 0,
   errorStatus: 0,
   errorRate: 0,
@@ -421,7 +430,21 @@ export async function load(dbPath) {
   initAuthSchema();
   initTestSchema();
   seedIfEmpty();
+  seedMissingBuiltinPresets();
   return getState();
+}
+
+// 幂等补种内置预设: 只补"名字缺失"的(INSERT OR IGNORE)，不覆盖用户已改过的同名预设。
+// 用途: 老库(presets 表非空、seedIfEmpty 跳过)也能拿到后加的内置预设(如流式故障预设)。
+function seedMissingBuiltinPresets() {
+  const existing = new Set(db.query("SELECT name FROM presets").all().map((r) => r.name));
+  const maxOrd = db.query("SELECT COALESCE(MAX(ord), -1) m FROM presets").get().m;
+  let ord = maxOrd + 1;
+  for (const p of BUILTIN_PRESETS) {
+    if (existing.has(p.name)) continue;
+    db.run("INSERT OR IGNORE INTO presets (name, patch, ord) VALUES (?, ?, ?)",
+      [p.name, JSON.stringify(normalizePatch(p.patch)), ord++]);
+  }
 }
 
 // 主要给测试用: 关掉当前连接(比如迁移测试要在临时文件上验证完就删掉, Windows 下文件被占着删不掉)。
@@ -545,6 +568,23 @@ export const TEST_CONFIG_DEFAULTS = {
   requestMode: "batch",
   count: 20,
   concurrency: 5,
+  // 测试类型："billing"(现有纯计费压测) | "lost_update"(测 new-api 用户更新丢失更新漏洞)
+  //   lost_update 需要 new-api 同时支持登录读用户状态 + 计费 API；
+  //   targetUrl 仍是计费流要打的入口(/v1/chat/completions 等)，管理借 luAdminUrl(默认=targetUrl)。
+  testType: "billing",
+  // 断开场景(测 new-api 的下游断开检测)："none" | "downstream"
+  //   downstream = 测试器作为客户端发流式请求，收到首包后主动掐断到 new-api 的连接，制造 client_gone。
+  //   上游卡死/上游断开不在这里，它们是 mock 作为"上游"的响应行为，在 Models→Configuration 里设。
+  disconnectMode: "none",
+  // ---- lost_update 专属参数（testType==="lost_update" 时生效）----
+  // new-api 根地址，登录、读/写用户都用它；不填时复用 targetUrl。
+  luAdminUrl: "",
+  luAdminUser: "root",      // 管理员账号(用于登录后 GET /api/user/{id} 读 quota/request_count)
+  luAdminPass: "123456",    // 首启密码（new-api 默认 root/123456）
+  luUserId: "",             // 被测用户 id（你在 new-api 后台手动建好填进来；apiKey 字段给该用户的系统 token）
+  luPath: "self",           // 触发哪个漏洞路径: "self"=PUT /api/user/self | "token"=GET /api/user/token | "setting"=PUT /api/user/setting
+  luProfileConcurrency: 3,  // 资料流的并发数
+  luProfileCount: 5000,     // 资料流的总次数（默认刷 5000 次 sidebar_modules 交替值）
   createdAt: "",
   updatedAt: "",
 };
@@ -556,8 +596,26 @@ function initTestSchema() {
     name TEXT, targetUrl TEXT, model TEXT, format TEXT, apiKey TEXT,
     channelId TEXT, prompt TEXT, stream INTEGER,
     requestMode TEXT, count INTEGER, concurrency INTEGER,
+    testType TEXT,
+    disconnectMode TEXT,
+    luAdminUrl TEXT, luAdminUser TEXT, luAdminPass TEXT,
+    luUserId TEXT, luPath TEXT, luProfileConcurrency INTEGER, luProfileCount INTEGER,
     passwordHash TEXT, createdAt TEXT, updatedAt TEXT, ord INTEGER
   )`);
+  // 老库补列：testType / disconnectMode / lu_* 都是后加的
+  const existing = new Set(db.query("PRAGMA table_info(test_configs)").all().map((c) => c.name));
+  if (!existing.has("disconnectMode")) {
+    db.run("ALTER TABLE test_configs ADD COLUMN disconnectMode TEXT");
+  }
+  if (!existing.has("testType")) {
+    db.run("ALTER TABLE test_configs ADD COLUMN testType TEXT");
+  }
+  for (const col of ["luAdminUrl","luAdminUser","luAdminPass","luUserId","luPath"]) {
+    if (!existing.has(col)) db.run(`ALTER TABLE test_configs ADD COLUMN ${col} TEXT`);
+  }
+  for (const col of ["luProfileConcurrency","luProfileCount"]) {
+    if (!existing.has(col)) db.run(`ALTER TABLE test_configs ADD COLUMN ${col} INTEGER`);
+  }
   db.run(`CREATE TABLE IF NOT EXISTS test_results (
     configId TEXT PRIMARY KEY, summary TEXT, requests TEXT, updatedAt TEXT
   )`);
