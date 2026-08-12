@@ -43,6 +43,16 @@ test("add-model: 建模型身份 + 同时建默认 Configuration", async () => {
   expect(configs[0].channelIds).toEqual([]);
 });
 
+test("add-model: seedance 来源自动使用视频任务默认配置", async () => {
+  await cmdAddModel(["seedance-custom"], { vendor: "seedance" });
+  const model = store.getModel("seedance-custom");
+  const config = store.getConfig("seedance-custom-default");
+  expect(model.format).toBe("seedance");
+  expect(config.completionTokens).toBe(108000);
+  expect(config.seedanceVideoUrl).toBe("https://example.com/mock-video.mp4");
+  expect(config.seedanceFinalStatus).toBe("succeeded");
+});
+
 test("add-model: 没给 id 报错", async () => {
   await expect(cmdAddModel([], {})).rejects.toThrow();
 });

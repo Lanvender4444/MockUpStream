@@ -18,7 +18,7 @@
     --v-openai:#10a37f; --v-claude:#d97757; --v-gemini:#a177f4; --v-deepseek:#1e88e5;
     --v-kimi:#8bc34a; --v-glm:#26c6da; --v-qwen:#e8a33d; --v-hunyuan:#7986cb;
     --v-mistral:#fa520f; --v-grok:#c9cdd3; --v-llama:#96786c; --v-minimax:#e73562; --v-ernie:#fbc02d;
-    --v-mimo:#8d97a5;
+    --v-mimo:#8d97a5; --v-seedance:#ff6b45;
     --radius:5px;
   }
   * { box-sizing:border-box; }
@@ -104,6 +104,7 @@
   .vendor-icon.grok { color:var(--v-grok); } .vendor-icon.llama { color:var(--v-llama); } .vendor-icon.minimax { color:var(--v-minimax); }
   .vendor-icon.ernie { color:var(--v-ernie); }
   .vendor-icon.mimo { color:var(--v-mimo); }
+  .vendor-icon.seedance { color:var(--v-seedance); }
   .vendor-icon.custom-openai { color:var(--v-openai); } .vendor-icon.custom-claude { color:var(--v-claude); } .vendor-icon.custom-gemini { color:var(--v-gemini); }
   .vendor-picker { display:flex; align-items:center; gap:8px; }
   .vendor-picker select { flex:1; min-width:0; }
@@ -111,6 +112,7 @@
   .fmt.openai { background:rgba(53,116,240,.15); color:var(--accent-fg); }
   .fmt.claude { background:rgba(212,160,43,.15); color:var(--warn); }
   .fmt.gemini { background:rgba(161,119,244,.15); color:var(--gemini); }
+  .fmt.seedance { background:rgba(255,107,69,.15); color:var(--v-seedance); }
 
   /* ---------- cards ---------- */
   .card { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:14px; }
@@ -460,6 +462,31 @@
               </div>
             </div>
             <div class="hint" style="margin:-4px 0 10px">点一下切换选中/取消，不选任何渠道 = 这份配置是该模型的兜底默认。</div>
+            <div x-show="sel && sel.format==='seedance'">
+              <div class="field-label" style="margin:14px 0 10px">Seedance 视频任务</div>
+              <div class="row"><label>视频 URL</label><input x-model="selConfig.seedanceVideoUrl" /></div>
+              <div class="row"><label>尾帧 URL</label><input x-model="selConfig.seedanceLastFrameUrl" /></div>
+              <div class="hint" style="margin:-4px 0 10px">任务成功后写入 <code>content.video_url</code>，New-API 会回填到结果的 <code>metadata.url</code>。</div>
+              <div class="row"><label>结算 completion_tokens</label><input type="number" min="0" x-model.number="selConfig.completionTokens" /></div>
+              <div class="hint" style="margin:-4px 0 10px">Seedance 多退少补只看这个数字；分辨率档和是否含视频输入仍由 New-API 在提交阶段从原始请求落库。</div>
+              <div class="row"><label>最终状态</label>
+                <select x-model="selConfig.seedanceFinalStatus"><option value="succeeded">succeeded（成功并结算）</option><option value="failed">failed（失败）</option></select>
+              </div>
+              <div class="row"><label>轮询状态机</label>
+                <div class="grid2">
+                  <input type="number" min="0" x-model.number="selConfig.seedanceQueuedPolls" placeholder="queued 次数" />
+                  <input type="number" min="0" x-model.number="selConfig.seedanceRunningPolls" placeholder="running 次数" />
+                </div>
+              </div>
+              <div class="hint" style="margin:-4px 0 10px">前 N 次查询返回 queued，再返回 N 次 running，之后进入最终状态；都填 0 就第一次查询直接完成。</div>
+              <div class="row"><label>分辨率 / 比例</label><div class="grid2"><input x-model="selConfig.seedanceResolution" placeholder="1080p" /><input x-model="selConfig.seedanceRatio" placeholder="16:9" /></div></div>
+              <div class="row"><label>时长 / FPS</label><div class="grid2"><input type="number" min="0" x-model.number="selConfig.seedanceDuration" /><input type="number" min="0" x-model.number="selConfig.seedanceFramesPerSecond" /></div></div>
+              <div class="row"><label>Seed / 服务档</label><div class="grid2"><input type="number" min="0" x-model.number="selConfig.seedanceSeed" /><input x-model="selConfig.seedanceServiceTier" placeholder="default" /></div></div>
+              <div class="row"><label>任务超时秒数</label><input type="number" min="0" x-model.number="selConfig.seedanceExecutionExpiresAfter" /></div>
+              <div class="row"><label>失败 code</label><input x-model="selConfig.seedanceFailureCode" /></div>
+              <div class="row"><label>失败 message</label><input x-model="selConfig.seedanceFailureMessage" /></div>
+            </div>
+            <div x-show="!sel || sel.format!=='seedance'">
             <div class="row"><label>回复内容</label><textarea x-model="selConfig.content" @change="saveConfig()"></textarea></div>
             <div class="hint" style="margin:-4px 0 10px">回复内容=实际返回的文本（原样，不截断）；「输出 token」只是<b>上报的计费数字</b>，与正文长度无关，互不影响。</div>
             <div class="row"><label>输入 token</label>
@@ -500,6 +527,7 @@
               </div>
             </div>
             <div class="row"><label>缓存写入(Claude)</label><input type="number" x-model.number="selConfig.cacheCreationTokens" /></div>
+            </div>
             <div class="row"><label>响应延迟 ms</label>
               <div class="grid2">
                 <select x-model="selConfig.latencyMode"><option value="fixed">fixed（固定）</option><option value="range">range（范围随机）</option></select>
@@ -516,6 +544,7 @@
               <select x-model="selConfig.latencyDist"><option value="uniform">均匀随机数</option><option value="normal">正态分布随机数</option></select>
             </div>
             <div class="hint" x-show="selConfig.latencyMode==='range'" style="margin:-4px 0 10px">均匀：区间内等概率；正态：以区间中点为均值、区间的六分之一为标准差，两端极小概率的尾部会被夹回区间内，不会溢出。每次请求都会重新采样一次延迟值，可以在「Recent Requests」里看实际用了多少 ms。</div>
+            <div x-show="!sel || sel.format!=='seedance'">
             <div class="row"><label>流式块间隔 ms</label><input type="number" x-model.number="selConfig.chunkDelayMs" /></div>
             <div class="row"><label>上游断开模拟</label>
               <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;flex:1">
@@ -540,6 +569,7 @@
             </div>
             <div class="hint" x-show="!selConfig.streamFault || selConfig.streamFault==='none'" style="margin:-4px 0 10px">
               这里只管「上游」断开。要测「下游断开(客户端断开 / client_gone)」，去 <b>Test</b> 标签页，「断开场景」选「下游断开」即可，无需在这里改。
+            </div>
             </div>
             <div class="row"><label>启用错误注入</label>
               <button @click="selConfig.errorEnabled = !selConfig.errorEnabled; saveConfig()" :class="selConfig.errorEnabled ? 'primary' : ''" class="sm" x-text="selConfig.errorEnabled ? '已启用' : '已停用'"></button>
@@ -751,7 +781,7 @@
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px">
             <input x-model="recentFilter.model" @input="recentPage=1" placeholder="Model 包含…" style="width:150px" />
             <select x-model="recentFilter.fmt" @change="recentPage=1">
-              <option value="">Fmt：全部</option><option value="openai">openai</option><option value="claude">claude</option><option value="gemini">gemini</option>
+              <option value="">Fmt：全部</option><option value="openai">openai</option><option value="claude">claude</option><option value="gemini">gemini</option><option value="seedance">seedance</option>
             </select>
             <select x-model="recentFilter.stream" @change="recentPage=1">
               <option value="">Stream：全部</option><option value="yes">yes</option><option value="no">no</option>
@@ -1248,20 +1278,20 @@ function app() {
     ],
     TRUST_MODES: ["allow-all", "deny-all", "whitelist", "blacklist"],
     VENDOR_FORMAT_MAP: {
-      openai:"openai", claude:"claude", gemini:"gemini",
+      openai:"openai", claude:"claude", gemini:"gemini", seedance:"seedance",
       deepseek:"openai", kimi:"openai", glm:"openai", qwen:"openai",
       hunyuan:"openai", mistral:"openai", grok:"openai", llama:"openai",
       minimax:"openai", ernie:"openai", mimo:"openai",
       "custom-openai":"openai", "custom-gemini":"gemini", "custom-claude":"claude",
     },
     VENDOR_LABELS: {
-      openai:"OpenAI", claude:"Claude", gemini:"Gemini",
+      openai:"OpenAI", claude:"Claude", gemini:"Gemini", seedance:"Seedance 视频",
       deepseek:"DeepSeek", kimi:"Kimi", glm:"GLM", qwen:"Qwen",
       hunyuan:"Hunyuan", mistral:"Mistral", grok:"Grok", llama:"Llama",
       minimax:"MiniMax", ernie:"Ernie", mimo:"MiMo",
       "custom-openai":"自定义（ChatGPT 格式）", "custom-gemini":"自定义（Gemini 格式）", "custom-claude":"自定义（Claude 格式）",
     },
-    VENDOR_ORDER: ["openai","claude","gemini","deepseek","kimi","glm","qwen","hunyuan","mistral","grok","llama","minimax","ernie","mimo","custom-openai","custom-gemini","custom-claude"],
+    VENDOR_ORDER: ["seedance","openai","claude","gemini","deepseek","kimi","glm","qwen","hunyuan","mistral","grok","llama","minimax","ernie","mimo","custom-openai","custom-gemini","custom-claude"],
     // 厂商图标: claude/gemini/deepseek/qwen/mistral/llama/minimax/ernie/kimi 来自 Simple Icons(CC0);
     // openai/grok/glm/hunyuan 官方没有 CC0 图标,取自其品牌页/公开品牌指南(仅用于在本产品里代表该品牌，非再分发)。
     // mimo(小米) 用 Simple Icons 的 Xiaomi 图标(CC0)代表 —— MiMo 是小米的大模型子品牌，本身没有独立 logo。
@@ -1666,7 +1696,8 @@ function app() {
       const id = this.newConfigState.id.trim();
       if (!id) { this.toast("请输入配置 ID", false); return; }
       const name = this.newConfigState.name.trim() || id;
-      await fetch("/__configs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id, modelId: this.sel.id, name }) });
+      const seedance = this.sel && this.sel.format === "seedance" ? this.seedanceConfigDefaults() : {};
+      await fetch("/__configs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id, modelId: this.sel.id, name, ...seedance }) });
       this.newConfigState.open = false;
       await this.loadState(); this.selectConfig(id); this.toast("已新建配置");
     },
@@ -1726,7 +1757,8 @@ function app() {
       const id = this.newModelState.id.trim();
       if (!id) { this.toast("请输入模型名称", false); return; }
       await fetch("/__models", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id, vendor: this.newModelState.vendor }) });
-      await fetch("/__configs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id: id + "-default", modelId: id, name: "默认" }) });
+      const seedance = this.newModelState.vendor === "seedance" ? this.seedanceConfigDefaults() : {};
+      await fetch("/__configs", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id: id + "-default", modelId: id, name: "默认", ...seedance }) });
       this.newModelState.open = false;
       await this.loadState(); this.select(id); this.toast("已新建模型");
     },
@@ -1785,8 +1817,21 @@ function app() {
     presetDefaults() {
       return { promptMode:"auto", promptTokens:100, completionTokens:30, cacheMode:"none", cacheRatio:0.5,
         cachedTokens:0, cacheCreationTokens:0, imageEnabled:0, imageFormat:"openai", imageInputTokens:0, imageOutputTokens:0,
+        seedanceVideoUrl:"https://example.com/mock-video.mp4", seedanceLastFrameUrl:"https://example.com/mock-last-frame.png",
+        seedanceFailureCode:"OutputVideoSensitiveContentDetected", seedanceFailureMessage:"The request failed because the output video may contain sensitive information.",
+        seedanceFinalStatus:"succeeded", seedanceQueuedPolls:0, seedanceRunningPolls:0, seedanceSeed:42,
+        seedanceResolution:"1080p", seedanceDuration:5, seedanceRatio:"16:9", seedanceFramesPerSecond:24,
+        seedanceServiceTier:"default", seedanceExecutionExpiresAfter:172800,
         latencyMs:0, latencyMode:"fixed", latencyMin:0, latencyMax:0, latencyDist:"uniform",
         chunkDelayMs:40, errorEnabled:0, errorStatus:0, errorRate:0, errorMessage:"mock injected error" };
+    },
+    seedanceConfigDefaults() {
+      return { promptMode:"fixed", promptTokens:0, completionTokens:108000,
+        seedanceVideoUrl:"https://example.com/mock-video.mp4", seedanceLastFrameUrl:"https://example.com/mock-last-frame.png",
+        seedanceFailureCode:"OutputVideoSensitiveContentDetected", seedanceFailureMessage:"The request failed because the output video may contain sensitive information.",
+        seedanceFinalStatus:"succeeded", seedanceQueuedPolls:0, seedanceRunningPolls:0, seedanceSeed:42,
+        seedanceResolution:"1080p", seedanceDuration:5, seedanceRatio:"16:9", seedanceFramesPerSecond:24,
+        seedanceServiceTier:"default", seedanceExecutionExpiresAfter:172800 };
     },
     newPreset() { this.editingPreset = "__new__"; this.presetForm = { name:"", ...this.presetDefaults() }; },
     editPreset(p) { this.editingPreset = p.name; this.presetForm = { name:p.name, ...this.presetDefaults(), ...p.patch }; },
@@ -1808,6 +1853,7 @@ function app() {
       const fmt = this.VENDOR_FORMAT_MAP[this.sel.vendor] || "openai";
       if (fmt === "openai") return "POST " + base + "/v1/chat/completions";
       if (fmt === "claude") return "POST " + base + "/v1/messages";
+      if (fmt === "seedance") return "POST " + base + "/api/v3/contents/generations/tasks";
       return "POST " + base + "/v1beta/models/" + this.sel.id + ":generateContent";
     },
     async copy(t) {

@@ -25,6 +25,7 @@ import * as openai from "./formats/openai.js";
 import * as openaiImage from "./formats/openai_image.js";
 import * as claude from "./formats/claude.js";
 import * as gemini from "./formats/gemini.js";
+import { SeedanceTaskStore, buildError as buildSeedanceError } from "./formats/seedance.js";
 import * as testRunner from "./testRunner.js";
 import { runLostUpdateTest } from "./lostUpdate.js";
 
@@ -33,6 +34,7 @@ const TLS = resolveTls();
 const PROTOCOL = TLS ? "https" : "http";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const recent = [];
+const seedanceTasks = new SeedanceTaskStore();
 let recSeq = 0; // 单调自增游标：给每条记录一个稳定 id，测试用它框出"本次跑批期间产生的记录"。
 function record(e) { recent.unshift({ _id: recSeq++, t: new Date().toISOString().slice(11, 19), ...e }); if (recent.length > 1000) recent.pop(); }
 
@@ -215,7 +217,58 @@ function usageTag(fmtName, resp) {
   const u = resp.usageMetadata; return `p${u.promptTokenCount}/c${u.candidatesTokenCount}/cache${u.cachedContentTokenCount || 0}`;
 }
 
-// 上游三种协议的路由表，主端口(channel=null)和每个渠道自己的独立端口都复用这一份。
+async function seedanceGate(cfg, channel, model, action) {
+  const channelLabel = channel ? `${channel.name} :${channel.port}` : null;
+  if (shouldChannelFail(channel)) {
+    const status = Number(channel.errorStatus) || 503;
+    record({ model, format: "seedance", stream: false, result: `ERR ${status}(channel)`, channel: channelLabel });
+    return { response: json(buildSeedanceError({ errorMessage: channel.errorMessage, errorStatus: status }), status) };
+  }
+  const latencyMs = resolveLatencyMs(cfg) + (channel ? Number(channel.extraLatencyMs) || 0 : 0);
+  if (latencyMs > 0) await sleep(latencyMs);
+  if (shouldInjectError(cfg)) {
+    const status = Number(cfg.errorStatus) || 500;
+    record({ model, format: "seedance", stream: false, result: `ERR ${status}(${action})`, latencyMs, channel: channelLabel });
+    return { response: json(buildSeedanceError(cfg), status) };
+  }
+  return { latencyMs, channelLabel };
+}
+
+async function handleSeedanceSubmit(req, channel) {
+  const body = await req.json().catch(() => ({}));
+  const model = String(body.model || "doubao-seedance-1-0-pro-250528");
+  const cfg = store.resolveModel(model, "seedance", channel ? channel.id : null);
+  const gate = await seedanceGate(cfg, channel, model, "submit");
+  if (gate.response) return gate.response;
+
+  const payload = seedanceTasks.create(body, cfg);
+  console.log(`[seedance] submit ${payload.id}\n${JSON.stringify(body, null, 2)}`);
+  record({ model, format: "seedance", stream: false, result: `submitted ${payload.id}`, latencyMs: gate.latencyMs, channel: gate.channelLabel });
+  return json(payload);
+}
+
+async function handleSeedanceQuery(id, channel) {
+  const task = seedanceTasks.inspect(id);
+  if (!task) return json({ error: { code: "NotFound", message: `task not found: ${id}` } }, 404);
+
+  const cfg = store.resolveModel(task.model, "seedance", channel ? channel.id : null);
+  const gate = await seedanceGate(cfg, channel, task.model, "query");
+  if (gate.response) return gate.response;
+  const response = seedanceTasks.query(id);
+  record({
+    model: task.model,
+    format: "seedance",
+    stream: false,
+    result: response.usage
+      ? `${response.status}/c${response.usage.completion_tokens}`
+      : response.status,
+    latencyMs: gate.latencyMs,
+    channel: gate.channelLabel,
+  });
+  return json(response);
+}
+
+// 上游协议路由表，主端口(channel=null)和每个渠道自己的独立端口都复用这一份。
 // 返回 Response 表示命中了；返回 null 表示这条路径不归这层管，调用方自己接着 404。
 async function routeUpstream(p, req, url, channel) {
   if (p === "/v1/models") {
@@ -232,6 +285,11 @@ async function routeUpstream(p, req, url, channel) {
   if (p === "/v1/messages" && req.method === "POST") return handleUpstream("claude", claude, req, url, channel);
   if (p.match(/\/models\/[^:]+:(generateContent|streamGenerateContent)/) && req.method === "POST")
     return handleUpstream("gemini", gemini, req, url, channel);
+  if (p === "/api/v3/contents/generations/tasks" && req.method === "POST")
+    return handleSeedanceSubmit(req, channel);
+  const seedanceTaskMatch = p.match(/^\/api\/v3\/contents\/generations\/tasks\/([^/]+)$/);
+  if (seedanceTaskMatch && req.method === "GET")
+    return handleSeedanceQuery(decodeURIComponent(seedanceTaskMatch[1]), channel);
   return null;
 }
 
@@ -414,6 +472,7 @@ Bun.serve({
     if (p === "/__reset" && req.method === "POST") {
       for (const id of [...channelListeners.keys()]) stopChannelListener(id);
       const state = await store.reset();
+      seedanceTasks.clear();
       for (const channel of state.channels) startChannelListener(channel);
       return json({ ok: true, state });
     }
@@ -621,7 +680,7 @@ Bun.serve({
 console.log(`mock upstream listening on ${PROTOCOL}://localhost:${PORT}`);
 console.log(`→ 控制台:      ${PROTOCOL}://localhost:${PORT}/`);
 console.log(`→ 渠道 Base URL: ${PROTOCOL}://localhost:${PORT}   (Docker: ${PROTOCOL}://host.docker.internal:${PORT})`);
-console.log(`  OpenAI /v1/chat/completions · 生图 /v1/images/generations · Claude /v1/messages · Gemini /v1beta/models/{m}:generateContent`);
+console.log(`  OpenAI /v1/chat/completions · 生图 /v1/images/generations · Claude /v1/messages · Gemini /v1beta/models/{m}:generateContent · Seedance /api/v3/contents/generations/tasks`);
 if (TLS) console.log(`  HTTPS 已启用(证书: ${TLS.certPath})。自签证书首次访问浏览器会报不可信，点"继续访问"即可；公网+域名场景建议改用 Caddy/nginx 反代，见 README。`);
 if (!store.getAuthConfig().passwordHash) {
   console.log(`  提醒: 控制台尚未设置密码，谁都能访问和修改配置。要给局域网/公网同事用之前，去面板"网络与安全"设一个。`);

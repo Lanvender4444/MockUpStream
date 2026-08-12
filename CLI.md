@@ -62,7 +62,7 @@ bun run cli <命令> [参数...]     # package.json 别名，等价于 bun scrip
 ```bash
 bun run cli add-model <id> [--vendor=openai] [--preset=预设名] [--字段=值 ...]
 ```
-新建/更新模型身份，同时建/改它的默认 Configuration（单步完成，不用分两条命令）。`--vendor` 决定协议格式（见 `store.js` 的 `VENDOR_FORMAT_MAP`：openai/deepseek/kimi/glm/qwen/hunyuan/mistral/grok/llama/minimax/ernie/mimo → openai 协议；claude → claude 协议；gemini → gemini 协议；custom-openai/custom-gemini/custom-claude → 对应协议，不确定选哪个厂商就用这三个）。
+新建/更新模型身份，同时建/改它的默认 Configuration（单步完成，不用分两条命令）。`--vendor` 决定协议格式（见 `store.js` 的 `VENDOR_FORMAT_MAP`：openai/deepseek/kimi/glm/qwen/hunyuan/mistral/grok/llama/minimax/ernie/mimo → openai 协议；claude → claude 协议；gemini → gemini 协议；seedance → Doubao / Seedance 异步视频任务协议；custom-openai/custom-gemini/custom-claude → 对应协议，不确定选哪个厂商就用这三个）。
 
 ```bash
 bun run cli list-models              # 列出全部模型 + 各自的 Configuration 数量
@@ -89,6 +89,12 @@ bun run cli apply-preset <configId> <presetName>   # 给已有 Configuration 套
 | `content` | 回复正文（原样返回，不截断） |
 | `promptMode` | `auto`（按输入估算）/ `fixed`（固定值） |
 | `promptTokens` / `completionTokens` | 输入/输出 token（`fixed` 模式下生效，或作为计费上报数字） |
+| `seedanceVideoUrl` / `seedanceFinalStatus` | Seedance 成功视频 URL / 最终状态（`succeeded` 或 `failed`） |
+| `seedanceLastFrameUrl` | 请求 `return_last_frame: true` 时返回的尾帧 URL |
+| `seedanceFailureCode` / `seedanceFailureMessage` | Seedance 失败终态的 `error` 字段 |
+| `seedanceQueuedPolls` / `seedanceRunningPolls` | Seedance 返回最终状态前的 queued / running 查询次数 |
+| `seedanceSeed` / `seedanceResolution` / `seedanceDuration` / `seedanceRatio` / `seedanceFramesPerSecond` | Seedance 查询响应的任务属性（请求值优先） |
+| `seedanceServiceTier` / `seedanceExecutionExpiresAfter` | Seedance 服务档和任务超时默认值（请求值优先） |
 | `cacheMode` | `none` / `ratio`（按比例） / `fixed`（固定值） |
 | `cacheRatio` / `cachedTokens` / `cacheCreationTokens` | 缓存命中/写入相关 |
 | `latencyMode` | `fixed`（固定 `latencyMs`）/ `range`（区间随机，见下） |

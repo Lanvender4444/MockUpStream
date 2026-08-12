@@ -1,6 +1,6 @@
-# Mock 上游（多模型 · 三格式 · 带控制台）
+# Mock 上游（多模型 · 四格式 · 带控制台）
 
-不用真实 API key，给 new-api 提供一个可视化控制的假上游：**多模型档案 + 场景预设 + OpenAI/Claude/Gemini 三种协议 + SQLite 持久化**。
+不用真实 API key，给 new-api 提供一个可视化控制的假上游：**多模型档案 + 场景预设 + OpenAI/Claude/Gemini/Seedance 四种协议 + SQLite 持久化**。
 
 ```
 浏览器/客户端 ──▶ new-api（真实全流程）──▶ 本 mock（你在网页上控制输出）
@@ -110,8 +110,8 @@ docker run --rm -p 8788:8788 ghcr.io/lanvender4444/mockupstream:latest
 - **Channels 标签页**：模拟多个上游渠道（各自独立的 Base URL、开关、错误率、额外延迟），详见下面「多渠道模拟」一节。
 - **最近请求**：实时表格，看每次调用的模型/格式/流/token/错误。
 
-> 预置了常见模型：`grok-4.5` `deepseek-v4-flash` `qwen3-max` `kimi-k2` `glm-4.6` `mimo-v2.5`（均 openai 格式）、`gemini-2.5-pro`（gemini）、`claude-opus-4-8`（claude）。
-> 注：grok/deepseek/qwen/kimi/glm/mimo 本身就是 **OpenAI 兼容格式**，所以 format=openai 是对的；只有 Gemini 和 Claude 用不同协议。新建模型可在「协议格式」下拉里改。
+> 预置了常见模型：`grok-4.5` `deepseek-v4-flash` `qwen3-max` `kimi-k2` `glm-4.6` `mimo-v2.5`（均 openai 格式）、`gemini-2.5-pro`（gemini）、`claude-opus-4-8`（claude）和 `doubao-seedance-1-0-pro-250528`（seedance）。
+> 注：grok/deepseek/qwen/kimi/glm/mimo 本身就是 **OpenAI 兼容格式**，所以 format=openai 是对的；Gemini、Claude 和 Seedance 使用各自协议。新建模型时在「厂商」中选择对应来源。
 
 配置写入 SQLite 库 `mock.db`，重启不丢（每次提交即时落盘，抗强杀）。
 
@@ -267,15 +267,35 @@ CI 已经把镜像自动构建推到了 GHCR（见上面"方式 3 · 现成镜�
 
 ---
 
-## 三种协议 / endpoint
+## 四种协议 / endpoint
 
 | 格式 | new-api 渠道类型 | endpoint | usage 语义 |
 |---|---|---|---|
 | openai | OpenAI（含 grok/deepseek/qwen/kimi 等兼容） | `POST /v1/chat/completions` | `prompt_tokens / completion_tokens / prompt_tokens_details.cached_tokens` |
 | claude | Anthropic / Claude | `POST /v1/messages` | `input_tokens(=prompt−cached−creation) / output_tokens / cache_read_input_tokens / cache_creation_input_tokens` |
 | gemini | Gemini | `POST /v1beta/models/{model}:generateContent`（流式 `:streamGenerateContent`） | `usageMetadata.promptTokenCount / candidatesTokenCount / cachedContentTokenCount` |
+| seedance | Doubao / Seedance 视频 | `POST /api/v3/contents/generations/tasks` + `GET /api/v3/contents/generations/tasks/{id}` | `usage.completion_tokens`（仅 `succeeded` 触发结算） |
 
 > **响应格式由请求打到哪个 endpoint 决定**，不是看模型的 format 字段。format 字段只影响面板分组和 `/v1/models` 列表。
+
+### Seedance 视频任务
+
+控制台内置 `doubao-seedance-1-0-pro-250528`，来源为独立的「Seedance 视频」。它和其它模型一样支持多份 Configuration、绑定渠道、延迟和错误注入，并额外提供：
+
+- 视频/尾帧 URL、最终状态（`succeeded` / `failed`）
+- `queued` 查询次数、`running` 查询次数
+- 结算用 `completion_tokens`（默认 `108000`）
+- 失败时的 `error.code` / `error.message`
+- 响应任务属性：seed、分辨率、时长、比例、FPS、service tier 和任务超时
+
+提交请求体会完整打印到 Mock 进程日志，便于检查 New-API 转换后的 ARK 参数是否透传。查询响应遵循火山方舟的状态相关结构：`queued` / `running` 不提前返回结果和 usage，`succeeded` 返回 `content` 与 `usage`，`failed` 只返回紧凑的 `error { code, message }`；HTTP 注入错误则按方舟网关返回 `error { code, message, param, type }`。请求里的 `resolution`、`ratio`、`duration` / `frames`、`seed`、`service_tier`、`execution_expires_after` 等会优先回显为实际任务属性；未提交时使用 Configuration 默认值。任务 id 和轮询次数保存在内存中，重启 Mock 或调用 `POST /__reset` 后清空。
+
+```powershell
+$task = Invoke-RestMethod -Uri "http://127.0.0.1:8788/api/v3/contents/generations/tasks" `
+  -Method Post -Headers @{ Authorization = "Bearer sk-mock" } -ContentType "application/json" `
+  -Body '{"model":"doubao-seedance-1-0-pro-250528","content":[{"type":"text","text":"测试视频"}],"resolution":"1080p","ratio":"16:9","duration":5}'
+Invoke-RestMethod -Uri ("http://127.0.0.1:8788/api/v3/contents/generations/tasks/" + $task.id)
+```
 
 
 
@@ -293,7 +313,8 @@ MockUpStream/
 ├── formats/
 │   ├── openai.js
 │   ├── claude.js
-│   └── gemini.js
+│   ├── gemini.js
+│   └── seedance.js
 ├── vendor/alpine.min.js # 本地 Alpine（无联网依赖）
 ├── panel.html           # 控制台
 ├── docker-compose.yml   # 独立 Docker 运行（相对挂载）

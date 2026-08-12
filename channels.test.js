@@ -60,6 +60,38 @@ test("其它模型只有一份不绑渠道的默认 Configuration", () => {
   expect(configs[0].channelIds).toEqual([]);
 });
 
+test("Seedance 示例模型使用独立来源并预填结算与视频任务字段", () => {
+  const model = store.getModel("doubao-seedance-1-0-pro-250528");
+  const config = store.getConfigsForModel(model.id)[0];
+  expect(model.vendor).toBe("seedance");
+  expect(model.format).toBe("seedance");
+  expect(config.completionTokens).toBe(108000);
+  expect(config.seedanceVideoUrl).toBe("https://example.com/mock-video.mp4");
+  expect(config.seedanceFinalStatus).toBe("succeeded");
+  expect(config.seedanceResolution).toBe("1080p");
+  expect(config.seedanceDuration).toBe(5);
+  expect(config.seedanceRatio).toBe("16:9");
+  expect(config.seedanceFramesPerSecond).toBe(24);
+});
+
+test("Seedance Configuration 可以按渠道覆盖状态机和结算 token", async () => {
+  await store.upsertConfig({
+    id: "seedance-on-backup",
+    modelId: "doubao-seedance-1-0-pro-250528",
+    name: "backup 视频任务",
+    channelIds: ["backup"],
+    completionTokens: 54000,
+    seedanceQueuedPolls: 2,
+    seedanceRunningPolls: 3,
+    seedanceFinalStatus: "failed",
+  });
+  const resolved = store.resolveModel("doubao-seedance-1-0-pro-250528", "seedance", "backup");
+  expect(resolved.completionTokens).toBe(54000);
+  expect(resolved.seedanceQueuedPolls).toBe(2);
+  expect(resolved.seedanceRunningPolls).toBe(3);
+  expect(resolved.seedanceFinalStatus).toBe("failed");
+});
+
 test("upsertChannel: 新建 + 数字字段兜底", async () => {
   const saved = await store.upsertChannel({ id: "ch1", name: "测试渠道", errorRate: "50" });
   expect(saved.id).toBe("ch1");

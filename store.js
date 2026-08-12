@@ -18,7 +18,7 @@ export const MODEL_DEFAULTS = {
 // 厂商 -> 协议格式。厂商是给人看的身份，协议格式是技术上走哪个 endpoint，两者自动关联，
 // 选厂商时不需要用户再单独选协议(openai 兼容的一大堆厂商都自动落到 openai 协议)。
 export const VENDOR_FORMAT_MAP = {
-  openai: "openai", claude: "claude", gemini: "gemini",
+  openai: "openai", claude: "claude", gemini: "gemini", seedance: "seedance",
   deepseek: "openai", kimi: "openai", glm: "openai", qwen: "openai",
   hunyuan: "openai", mistral: "openai", grok: "openai", llama: "openai",
   minimax: "openai", ernie: "openai", mimo: "openai",
@@ -55,6 +55,21 @@ export const CONFIG_DEFAULTS = {
   imageFormat: "openai",
   imageInputTokens: 0,
   imageOutputTokens: 0,
+  // Seedance 异步视频任务。completionTokens 复用上面的通用输出 token，作为成功结算依据。
+  seedanceVideoUrl: "https://example.com/mock-video.mp4",
+  seedanceLastFrameUrl: "https://example.com/mock-last-frame.png",
+  seedanceFailureCode: "OutputVideoSensitiveContentDetected",
+  seedanceFailureMessage: "The request failed because the output video may contain sensitive information.",
+  seedanceFinalStatus: "succeeded", // "succeeded" | "failed"
+  seedanceQueuedPolls: 0,
+  seedanceRunningPolls: 0,
+  seedanceSeed: 42,
+  seedanceResolution: "1080p",
+  seedanceDuration: 5,
+  seedanceRatio: "16:9",
+  seedanceFramesPerSecond: 24,
+  seedanceServiceTier: "default",
+  seedanceExecutionExpiresAfter: 172800,
   latencyMs: 0,
   latencyMode: "fixed",   // "fixed" | "range" —— range 模式下 latencyMs 不用, 看 latencyMin/Max/Dist
   latencyMin: 0,
@@ -76,6 +91,26 @@ export const CONFIG_DEFAULTS = {
   errorMessage: "mock injected error",
 };
 const CONFIG_COLS = Object.keys(CONFIG_DEFAULTS);
+
+export const SEEDANCE_CONFIG_DEFAULTS = {
+  promptMode: "fixed",
+  promptTokens: 0,
+  completionTokens: 108000,
+  seedanceVideoUrl: "https://example.com/mock-video.mp4",
+  seedanceLastFrameUrl: "https://example.com/mock-last-frame.png",
+  seedanceFailureCode: "OutputVideoSensitiveContentDetected",
+  seedanceFailureMessage: "The request failed because the output video may contain sensitive information.",
+  seedanceFinalStatus: "succeeded",
+  seedanceQueuedPolls: 0,
+  seedanceRunningPolls: 0,
+  seedanceSeed: 42,
+  seedanceResolution: "1080p",
+  seedanceDuration: 5,
+  seedanceRatio: "16:9",
+  seedanceFramesPerSecond: 24,
+  seedanceServiceTier: "default",
+  seedanceExecutionExpiresAfter: 172800,
+};
 
 // 渠道行为字段默认值(新建/兜底用)。渠道管"这条链路本身通不通/稳不稳/快不快"，
 // 跟 Configuration 决定"返回什么内容"是两个独立维度，可以叠加。
@@ -121,6 +156,7 @@ const DEFAULT_MODELS = [
   // 两个生图示例模型,和常见真实网关同名,方便直接对着测图片输入/输出计价。
   { ...MODEL_DEFAULTS, id: "gpt-image-2", format: "openai", vendor: "openai" },
   { ...MODEL_DEFAULTS, id: "gemini-3.1-flash-image-preview", format: "gemini", vendor: "gemini" },
+  { ...MODEL_DEFAULTS, id: "doubao-seedance-1-0-pro-250528", format: "seedance", vendor: "seedance" },
 ];
 
 // 每个模型至少一个默认 Configuration(不绑渠道 = 兜底)。给 grok-4.5 额外加两个绑定具体渠道的示例，
@@ -141,6 +177,7 @@ const DEFAULT_CONFIGS = [
   { id: "gpt-image-2-default", modelId: "gpt-image-2", name: "默认", imageEnabled: 1, imageFormat: "openai", promptMode: "fixed", promptTokens: 11, completionTokens: 4354, imageOutputTokens: 4354 },
   // gemini-3.1-flash-image-preview:混合输出(图片 1120 + 文字 437)。
   { id: "gemini-3.1-flash-image-preview-default", modelId: "gemini-3.1-flash-image-preview", name: "默认", imageEnabled: 1, imageFormat: "gemini", promptMode: "fixed", promptTokens: 8, completionTokens: 1557, imageOutputTokens: 1120 },
+  { id: "doubao-seedance-1-0-pro-250528-default", modelId: "doubao-seedance-1-0-pro-250528", name: "默认", ...SEEDANCE_CONFIG_DEFAULTS },
 ];
 
 // 3 个示例渠道，直接演示典型的多渠道测试场景(权重/失败转移/限流降级)。
@@ -418,7 +455,12 @@ function rowToConfig(row) {
 // ---------- 对外 API（与旧版一致）----------
 
 export async function load(dbPath) {
-  db = new Database(dbPath || DB_PATH);
+  if (db) {
+    try { db.close(); } catch {}
+    db = null;
+  }
+  const path = dbPath || DB_PATH;
+  db = new Database(path);
   // 配置库写操作极少, 不用 WAL(避免强杀丢未 checkpoint 的提交);
   // 默认回滚日志 + synchronous FULL => 每次提交即时落盘, 抗强杀。
   db.run("PRAGMA synchronous = FULL");
@@ -430,8 +472,23 @@ export async function load(dbPath) {
   initAuthSchema();
   initTestSchema();
   seedIfEmpty();
+  // 正式库需要给已有安装补 Seedance；测试/临时自定义库由 seedIfEmpty 负责空库初始化，
+  // 不额外写入内置模型，避免改变迁移测试夹具的内容和生命周期。
+  if (path === DB_PATH) seedMissingSeedanceModel();
   seedMissingBuiltinPresets();
   return getState();
+}
+
+// 老数据库升级时 models 表并不为空；只补这次新增的 Seedance 示例，不覆盖同名用户配置。
+function seedMissingSeedanceModel() {
+  const modelId = "doubao-seedance-1-0-pro-250528";
+  if (!getModel(modelId)) writeModel({ id: modelId, vendor: "seedance" });
+  if (!getConfigsForModel(modelId).length) {
+    writeConfig({
+      id: `${modelId}-default`, modelId, name: "默认",
+      ...SEEDANCE_CONFIG_DEFAULTS,
+    });
+  }
 }
 
 // 幂等补种内置预设: 只补"名字缺失"的(INSERT OR IGNORE)，不覆盖用户已改过的同名预设。
@@ -450,6 +507,7 @@ function seedMissingBuiltinPresets() {
 // 主要给测试用: 关掉当前连接(比如迁移测试要在临时文件上验证完就删掉, Windows 下文件被占着删不掉)。
 export function close() {
   if (db) db.close();
+  db = null;
 }
 
 export function getState() {
@@ -697,6 +755,7 @@ export async function reset() {
   db.run("DELETE FROM presets");
   db.run("DELETE FROM channels");
   seedIfEmpty();
+  seedMissingSeedanceModel();
   return getState();
 }
 

@@ -91,7 +91,8 @@ export async function cmdAddModel(positional, flags) {
 
   const model = await store.upsertModel({ id, vendor: flags.vendor || store.MODEL_DEFAULTS.vendor });
   const patch = buildConfigPatch(flags, { skipKeys: ["vendor"] });
-  const config = await store.upsertConfig({ id: `${id}-default`, modelId: id, name: "默认", ...patch });
+  const protocolDefaults = model.format === "seedance" ? store.SEEDANCE_CONFIG_DEFAULTS : {};
+  const config = await store.upsertConfig({ id: `${id}-default`, modelId: id, name: "默认", ...protocolDefaults, ...patch });
 
   console.log(`已创建/更新模型: ${model.id}  vendor=${model.vendor}  format=${model.format}（默认 Configuration: ${config.id}）`);
   return model;
