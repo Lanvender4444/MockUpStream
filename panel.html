@@ -856,6 +856,28 @@
           </div>
 
           <div class="card">
+            <h2>Upstream Request ID（模拟上游 reqid）</h2>
+            <div class="card-sub">给每个 LLM 响应带上「上游为这次请求分配的 request id」响应头，用来测 new-api 的上游 Request ID 抓取 / 落库 / 回传给客户端。</div>
+            <div class="row">
+              <label>启用</label>
+              <input type="checkbox" x-model="upstreamReqid.enabled" style="width:auto;flex:none" />
+            </div>
+            <div class="row">
+              <label>头名</label>
+              <input x-model="upstreamReqid.header" placeholder="留空=按格式自动（openai→x-request-id / claude→request-id / gemini→x-goog-request-id）" />
+            </div>
+            <div class="row">
+              <label>固定值</label>
+              <input x-model="upstreamReqid.value" placeholder="留空=每次随机 req_mock_xxx" />
+            </div>
+            <div class="btns"><button class="primary" @click="saveUpstreamReqid()">Save</button></div>
+            <div class="hint">
+              关掉 = 响应不带该头，用来测「上游没返回 id」的空值路径。改头名可模拟 Azure（<code>apim-request-id</code>）、Bedrock（<code>x-amzn-requestid</code>）、Cloudflare（<code>cf-ray</code>）等分支。
+              验证：<code>curl -i</code> 打 <code>/v1/chat/completions</code> 看响应头，或在 new-api 用量日志的「上游 Request ID」列查看。
+            </div>
+          </div>
+
+          <div class="card">
             <h2>Trust Policy</h2>
             <div class="card-sub">局域网 / 公网信任策略，两条策略独立生效，互不覆盖</div>
 
@@ -1263,6 +1285,7 @@ function app() {
     modelSearch: "", collapsedGroups: {},
     confirmState: { open:false, message:"", resolveFn:null },
     port: "", lanIps: [],
+    upstreamReqid: { enabled: true, header: "", value: "" },
     promptText: "",
     TERMINAL_COMMANDS: [
       "bun run server.js",
@@ -1382,6 +1405,7 @@ function app() {
       // 存回去的时候 store.js 的 normalizeChannel 会把 true/false 自动转回 1/0，不用在 saveChannel 里特地转。
       this.models = s.models; this.configurations = s.configurations || []; this.presets = s.presets;
       this.channels = (s.channels || []).map(c => ({ ...c, enabled: !!c.enabled })); this.port = s.port; this.lanIps = s.lanIps || [];
+      if (s.upstreamReqid) this.upstreamReqid = { enabled: !!s.upstreamReqid.enabled, header: s.upstreamReqid.header || "", value: s.upstreamReqid.value || "" };
       if (this.sel) { const still = this.models.find(m => m.id === this.sel.id); this.sel = still ? JSON.parse(JSON.stringify(still)) : (this.models[0] ? JSON.parse(JSON.stringify(this.models[0])) : null); }
       if (this.sel) {
         const configs = this.modelConfigs();
@@ -1900,6 +1924,12 @@ function app() {
       const r = await fetch("/__auth/config", { method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ public: { mode: this.authForm.public.mode, list: this.authForm.public.list } }) });
       if (r.ok) { await this.loadAuthStatus(); this.toast("公网策略已保存"); }
+      else this.toast("保存失败", false);
+    },
+    async saveUpstreamReqid() {
+      const r = await fetch("/__settings/upstream-reqid", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ enabled: this.upstreamReqid.enabled, header: this.upstreamReqid.header, value: this.upstreamReqid.value }) });
+      if (r.ok) { const { upstreamReqid } = await r.json(); if (upstreamReqid) this.upstreamReqid = upstreamReqid; this.toast("上游 Request ID 设置已保存"); }
       else this.toast("保存失败", false);
     },
     async logout() {

@@ -41,6 +41,22 @@ function record(e) { recent.unshift({ _id: recSeq++, t: new Date().toISOString()
 const json = (obj, status = 200, extraHeaders) =>
   new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "X-Mock-Upstream": "1", ...(extraHeaders || {}) } });
 
+// 模拟"上游为这次请求分配的 request id"。各家上游放在不同响应头里，这里按格式给默认头名，
+// 让 new-api 的 ExtractUpstreamRequestId 能命中对应分支；控制台可覆盖头名/固定值/整体开关。
+const REQID_DEFAULT_HEADER = { openai: "x-request-id", "openai-image": "x-request-id", claude: "request-id", gemini: "x-goog-request-id" };
+function genReqId(fmtName) {
+  const rand = () => Math.random().toString(16).slice(2, 10);
+  return (fmtName === "claude" ? "req_" : "req_mock_") + rand() + rand();
+}
+// 返回要注入的响应头对象；关掉时返回 {}（即不带该头，用于测 new-api "上游没给 id" 的空值路径）。
+function upstreamReqidHeaders(fmtName) {
+  const s = store.getUpstreamReqid();
+  if (!s.enabled) return {};
+  const name = (s.header && s.header.trim()) || REQID_DEFAULT_HEADER[fmtName] || "x-request-id";
+  const value = (s.value && s.value.trim()) || genReqId(fmtName);
+  return { [name]: value };
+}
+
 await store.load();
 
 function lanIps() {
@@ -125,13 +141,17 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
 
   const cfg = store.resolveModel(parsed.model, fmtName, channel ? channel.id : null);
 
+  // 模拟上游返回的 request id 头：渠道能连上、上游有响应就带上（含上游返回错误的情况），
+  // 每次请求一个新值。渠道级失败(连不上)不走到这里，也就不带——语义上"没有上游响应"。
+  const reqidHeaders = upstreamReqidHeaders(fmtName);
+
   const latencyMs = resolveLatencyMs(cfg) + (channel ? Number(channel.extraLatencyMs) || 0 : 0);
   if (latencyMs > 0) await sleep(latencyMs);
 
   // 注入错误
   if (shouldInjectError(cfg)) {
     record({ model: parsed.model || cfg.id, format: fmtName, stream: parsed.stream, result: `ERR ${cfg.errorStatus}`, latencyMs, channel: channelLabel });
-    return json(fmt.buildError(cfg), Number(cfg.errorStatus) || 500);
+    return json(fmt.buildError(cfg), Number(cfg.errorStatus) || 500, reqidHeaders);
   }
 
   const modelName = parsed.model || cfg.id;
@@ -140,7 +160,7 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
   if (!parsed.stream) {
     const resp = fmt.buildResponse(cfg, parsed.messages, modelName, parsed.n);
     record({ model: modelName, format: fmtName, stream: false, result: usageTag(fmtName, resp), latencyMs, channel: channelLabel });
-    return json(resp);
+    return json(resp, 200, reqidHeaders);
   }
 
   // 流式 (SSE)
@@ -200,7 +220,7 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
     },
   });
   record({ model: modelName, format: fmtName, stream: true, result: faultResult, latencyMs, channel: channelLabel });
-  const streamHeaders = { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Mock-Upstream": "1" };
+  const streamHeaders = { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Mock-Upstream": "1", ...reqidHeaders };
   if (fault === "abort") {
     // 上游断开专用: 谎报一个远大于实际输出的 Content-Length，配合上面"发几帧就 close"，
     // 让 new-api 读到"字节数不足、连接提前结束" → io.ErrUnexpectedEOF → scanner_error(上游断开)。
@@ -475,6 +495,10 @@ Bun.serve({
       seedanceTasks.clear();
       for (const channel of state.channels) startChannelListener(channel);
       return json({ ok: true, state });
+    }
+    if (p === "/__settings/upstream-reqid" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      return json({ ok: true, upstreamReqid: store.setUpstreamReqid(b) });
     }
 
     // ---------- 测试配置 CRUD ----------

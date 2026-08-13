@@ -351,6 +351,16 @@ function migrateLegacyTrustColumns() {
   }
 }
 
+// 单行设置表(id=1)。目前存"模拟上游 request id"的开关/自定义头名/固定值。
+// enabled 用 0/1(SQLite 无 boolean);header/value 留空表示"按格式自动/随机"。
+function initSettingsSchema() {
+  db.run(`CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), reqidEnabled INTEGER, reqidHeader TEXT, reqidValue TEXT, updatedAt TEXT)`);
+  const row = db.query("SELECT id FROM settings WHERE id = 1").get();
+  if (!row) {
+    db.run("INSERT INTO settings (id, reqidEnabled, reqidHeader, reqidValue, updatedAt) VALUES (1, 1, '', '', NULL)");
+  }
+}
+
 function seedIfEmpty() {
   // 渠道先种(models 下面的示例 Configuration 会引用渠道 id)
   const nChannels = db.query("SELECT COUNT(*) c FROM channels").get().c;
@@ -470,6 +480,7 @@ export async function load(dbPath) {
   migrateConfigColumns();
   migrateChannelColumns();
   initAuthSchema();
+  initSettingsSchema();
   initTestSchema();
   seedIfEmpty();
   // 正式库需要给已有安装补 Seedance；测试/临时自定义库由 seedIfEmpty 负责空库初始化，
@@ -516,7 +527,7 @@ export function getState() {
   const presets = db.query("SELECT name, patch FROM presets ORDER BY ord, rowid").all()
     .map((r) => ({ name: r.name, patch: JSON.parse(r.patch) }));
   const channels = db.query("SELECT * FROM channels ORDER BY ord, rowid").all().map(rowToChannel);
-  return { models, configurations, presets, channels };
+  return { models, configurations, presets, channels, upstreamReqid: getUpstreamReqid() };
 }
 
 export function getModel(id) {
@@ -787,6 +798,32 @@ export function setAuthConfig(patch) {
   db.run(
     "UPDATE auth SET passwordHash = ?, lanMode = ?, lanList = ?, publicMode = ?, publicList = ?, updatedAt = ? WHERE id = 1",
     [next.passwordHash, next.lan.mode, next.lan.list, next.public.mode, next.public.list, next.updatedAt]
+  );
+  return next;
+}
+
+// ---------- 模拟上游 request id 设置 ----------
+// enabled: 是否在 LLM 响应里带 request-id 头;header: 自定义头名(空=按格式默认);value: 固定值(空=随机)。
+export function getUpstreamReqid() {
+  const row = db.query("SELECT reqidEnabled, reqidHeader, reqidValue FROM settings WHERE id = 1").get()
+    || { reqidEnabled: 1, reqidHeader: "", reqidValue: "" };
+  return {
+    enabled: row.reqidEnabled == null ? true : !!row.reqidEnabled,
+    header: row.reqidHeader || "",
+    value: row.reqidValue || "",
+  };
+}
+
+export function setUpstreamReqid(patch) {
+  const cur = getUpstreamReqid();
+  const next = {
+    enabled: patch.enabled !== undefined ? !!patch.enabled : cur.enabled,
+    header: patch.header !== undefined ? String(patch.header || "").trim() : cur.header,
+    value: patch.value !== undefined ? String(patch.value || "").trim() : cur.value,
+  };
+  db.run(
+    "UPDATE settings SET reqidEnabled = ?, reqidHeader = ?, reqidValue = ?, updatedAt = ? WHERE id = 1",
+    [next.enabled ? 1 : 0, next.header, next.value, new Date().toISOString()]
   );
   return next;
 }
