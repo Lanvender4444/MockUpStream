@@ -22,6 +22,7 @@ import * as auth from "./auth.js";
 import { resolveTls } from "./tls.js";
 import { shouldInjectError, resolveLatencyMs, shouldChannelFail } from "./usage.js";
 import * as openai from "./formats/openai.js";
+import * as openaiResponses from "./formats/openai_responses.js";
 import * as openaiImage from "./formats/openai_image.js";
 import * as claude from "./formats/claude.js";
 import * as gemini from "./formats/gemini.js";
@@ -184,10 +185,11 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
         sent++;
       };
       try {
-        if (fmtName === "claude") {
+        if (fmtName === "claude" || fmt.meta?.namedEvents) {
           // Claude: 具名事件  event: X\n data: {...}\n\n
           await fmt.buildStream(cfg, parsed.messages, modelName, (event, data) => {
-            push(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+            if (data === "[DONE]") push("data: [DONE]\n\n");
+            else push(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
           }, sleep);
         } else {
           // openai / gemini: data: {...}\n\n ; openai 末尾 send("[DONE]")
@@ -232,6 +234,7 @@ async function handleUpstream(fmtName, fmt, req, url, channel) {
 
 function usageTag(fmtName, resp) {
   if (fmtName === "openai") { const u = resp.usage; return `p${u.prompt_tokens}/c${u.completion_tokens}/cache${u.prompt_tokens_details.cached_tokens}`; }
+  if (fmtName === "responses") { const u = resp.usage; return `in${u.input_tokens}/out${u.output_tokens}/cache${u.input_tokens_details.cached_tokens}`; }
   if (fmtName === "openai-image") { const u = resp.usage; return `in${u.input_tokens}/out${u.output_tokens}/imgIn${u.input_tokens_details?.image_tokens || 0}`; }
   if (fmtName === "claude") { const u = resp.usage; return `in${u.input_tokens}/out${u.output_tokens}/read${u.cache_read_input_tokens}`; }
   const u = resp.usageMetadata; return `p${u.promptTokenCount}/c${u.candidatesTokenCount}/cache${u.cachedContentTokenCount || 0}`;
@@ -300,6 +303,8 @@ async function routeUpstream(p, req, url, channel) {
     return json({ object: "list", data });
   }
   if (p === "/v1/chat/completions" && req.method === "POST") return handleUpstream("openai", openai, req, url, channel);
+  if ((p === "/v1/responses" || p === "/v1/responses/compact") && req.method === "POST")
+    return handleUpstream("responses", openaiResponses, req, url, channel);
   if ((p === "/v1/images/generations" || p === "/v1/images/edits") && req.method === "POST")
     return handleUpstream("openai-image", openaiImage, req, url, channel);
   if (p === "/v1/messages" && req.method === "POST") return handleUpstream("claude", claude, req, url, channel);
@@ -704,7 +709,7 @@ Bun.serve({
 console.log(`mock upstream listening on ${PROTOCOL}://localhost:${PORT}`);
 console.log(`→ 控制台:      ${PROTOCOL}://localhost:${PORT}/`);
 console.log(`→ 渠道 Base URL: ${PROTOCOL}://localhost:${PORT}   (Docker: ${PROTOCOL}://host.docker.internal:${PORT})`);
-console.log(`  OpenAI /v1/chat/completions · 生图 /v1/images/generations · Claude /v1/messages · Gemini /v1beta/models/{m}:generateContent · Seedance /api/v3/contents/generations/tasks`);
+console.log(`  OpenAI /v1/chat/completions · Responses /v1/responses · 生图 /v1/images/generations · Claude /v1/messages · Gemini /v1beta/models/{m}:generateContent · Seedance /api/v3/contents/generations/tasks`);
 if (TLS) console.log(`  HTTPS 已启用(证书: ${TLS.certPath})。自签证书首次访问浏览器会报不可信，点"继续访问"即可；公网+域名场景建议改用 Caddy/nginx 反代，见 README。`);
 if (!store.getAuthConfig().passwordHash) {
   console.log(`  提醒: 控制台尚未设置密码，谁都能访问和修改配置。要给局域网/公网同事用之前，去面板"网络与安全"设一个。`);

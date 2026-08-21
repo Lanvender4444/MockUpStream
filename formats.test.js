@@ -2,6 +2,7 @@
 import { test, expect } from "bun:test";
 import { computeUsage, chunkText, resolveLatencyMs } from "./usage.js";
 import * as openai from "./formats/openai.js";
+import * as openaiResponses from "./formats/openai_responses.js";
 import * as claude from "./formats/claude.js";
 import * as gemini from "./formats/gemini.js";
 
@@ -35,6 +36,31 @@ test("openai: usage 字段映射", () => {
   expect(r.usage.prompt_tokens_details.cached_tokens).toBe(200);
 });
 
+test("responses: 字符串 input 解析并映射 usage", () => {
+  const parsed = openaiResponses.parseRequest({ model: "gpt-x", input: "hello", stream: false });
+  expect(parsed).toEqual({ model: "gpt-x", messages: [{ role: "user", content: "hello" }], stream: false });
+
+  const r = openaiResponses.buildResponse(cfg, parsed.messages, parsed.model);
+  expect(r.object).toBe("response");
+  expect(r.status).toBe("completed");
+  expect(r.output[0].content[0].text).toBe(cfg.content);
+  expect(r.usage.input_tokens).toBe(500);
+  expect(r.usage.output_tokens).toBe(77);
+  expect(r.usage.total_tokens).toBe(577);
+  expect(r.usage.input_tokens_details.cached_tokens).toBe(200);
+});
+
+test("responses: 消息数组 input 提取文本", () => {
+  const parsed = openaiResponses.parseRequest({
+    model: "custom-x",
+    stream: true,
+    input: [{ role: "user", content: [{ type: "input_text", text: "hello array" }] }],
+  });
+  expect(parsed.model).toBe("custom-x");
+  expect(parsed.stream).toBe(true);
+  expect(parsed.messages[0].content).toBe("hello array");
+});
+
 test("claude: input_tokens = prompt - cached - creation", () => {
   const r = claude.buildResponse(cfg, [], "claude-x");
   expect(r.usage.input_tokens).toBe(500 - 200 - 50); // 250
@@ -65,6 +91,20 @@ test("openai 流式: 末尾有 usage 块 + [DONE]", async () => {
   expect(ev.at(-1)).toBe("[DONE]");
   const usageChunk = ev.find((e) => e && e.usage);
   expect(usageChunk.usage.prompt_tokens).toBe(500);
+});
+
+test("responses 流式: delta 后发送 completed usage 和 [DONE]", async () => {
+  const events = [];
+  await openaiResponses.buildStream(cfg, [{ role: "user", content: "hi" }], "gpt-x", (event, data) => {
+    events.push({ event, data });
+  }, async () => {});
+
+  const deltas = events.filter((e) => e.event === "response.output_text.delta");
+  expect(deltas.map((e) => e.data.delta).join("")).toBe(cfg.content);
+  const completed = events.find((e) => e.event === "response.completed");
+  expect(completed.data.response.usage.input_tokens).toBe(500);
+  expect(completed.data.response.usage.output_tokens).toBe(77);
+  expect(events.at(-1)).toEqual({ event: null, data: "[DONE]" });
 });
 
 test("claude 流式: message_delta 带 output_tokens, message_start 带 input_tokens", async () => {
